@@ -18,6 +18,42 @@
 
 #define die(s) (perror(s), exit(1))
 
+struct smem {
+    size_t blocks;
+    __u8* bitmap;
+    void* map;
+};
+
+struct sring {
+    __u32* head;
+    __u32* tail;
+    __u32* ring_mask;
+    __u32* ring_entries;
+    __u32* flags;
+    __u32* array;
+    struct io_uring_sqe* sqes;
+};
+
+struct cring {
+    __u32* head;
+    __u32* tail;
+    __u32* ring_mask;
+    __u32* ring_entries;
+    struct io_uring_cqe* cqes;
+};
+
+struct hring {
+    int fd;
+    bool kind;
+
+    struct smem mem;
+
+    union {
+        struct sring sr;
+        struct cring cr;
+    };
+};
+
 struct uring {
     int fd;
 
@@ -44,11 +80,12 @@ struct uring {
 };
 
 struct msg {
-    size_t len;
-    char msg[];
+    __u16 len;
+    __u8 msg[];
 };
 
-size_t file_size(int fd) {
+[[gnu::always_inline]]
+inline size_t file_size(int fd) {
     struct stat s;
 
     if (fstat(fd, &s) < 0) die("stat");
@@ -56,37 +93,35 @@ size_t file_size(int fd) {
     return s.st_size;
 }
 
-__s32 io_uring_setup(__u32 entries, struct io_uring_params* p) {
+[[gnu::always_inline]]
+inline __s32 io_uring_setup(__u32 entries, struct io_uring_params* p) {
     return (int)syscall(__NR_io_uring_setup, entries, p);
 }
 
-__s32 io_uring_enter(int fd, unsigned int to_submit, unsigned int min_complete,
-                     unsigned int flags) {
+[[gnu::always_inline]]
+inline __s32 io_uring_enter(int fd, unsigned int to_submit,
+                            unsigned int min_complete, unsigned int flags) {
     return (int)syscall(__NR_io_uring_enter, fd, to_submit, min_complete, flags,
                         NULL, 0);
 }
 
-__s32 pidfd_getfd(__s32 pidfd, __s32 fd) {
+[[gnu::always_inline]]
+inline __s32 pidfd_getfd(__s32 pidfd, __s32 fd) {
     return (__s32)syscall(SYS_pidfd_getfd, pidfd, fd, 0);
 }
 
-__s32 pidfd_open(__s32 ppid) { return (__s32)syscall(SYS_pidfd_open, ppid, 0); }
+[[gnu::always_inline]]
+inline __s32 pidfd_open(__s32 ppid) {
+    return (__s32)syscall(SYS_pidfd_open, ppid, 0);
+}
 
-int queue_cat(struct uring* u, char const* msg, size_t len) {
-    __s32 memfd = shm_open("uring_shm", O_CREAT | O_RDWR, S_IRWXU);
-
-    if (memfd == -1) die("shm_open");
-
-    if (ftruncate(memfd, sizeof(struct msg) + len) == -1) die("ftruncate");
-
-    struct msg* payload = mmap(0, sizeof(struct msg) + len,
-                               PROT_READ | PROT_WRITE, MAP_SHARED, memfd, 0);
-
-    if (payload == MAP_FAILED) die("malloc 1");
+int queue(struct uring* u, char const* msg, size_t len, struct msg* payload,
+          off_t off) {
+    // struct msg* payload = shm_init(1);
 
     payload->len = len;
 
-    if (!memcpy(payload->msg, msg, len)) die("memcpy");
+    if (!memcpy(payload->msg, msg, len + 1)) die("memcpy");
 
     size_t next_tail = 0;
     size_t tail = 0;
@@ -104,7 +139,7 @@ int queue_cat(struct uring* u, char const* msg, size_t len) {
     u->sqes[index].addr = 0;
     u->sqes[index].len = len;
     u->sqes[index].off = 0;
-    u->sqes[index].user_data = (__u64)payload;
+    u->sqes[index].user_data = (__u64)off;
 
     u->sr.array[index] = index;
 
@@ -124,15 +159,8 @@ int queue_cat(struct uring* u, char const* msg, size_t len) {
     return 0;
 }
 
-void dequeue_cat(struct uring* u) {
-    __s32 memfd = shm_open("uring_shm", O_RDONLY, 0);
-
-    if (memfd == -1) die("shm_open");
-
-    struct msg* payload =
-        mmap(NULL, file_size(memfd), PROT_READ, MAP_SHARED, memfd, 0);
-
-    if (payload == MAP_FAILED) die("mmap");
+void dequeue(struct uring* u, void* mem) {
+    // struct msg* payload = shm_from_file("uring_shm");
 
     __u32 head = *u->cr.head;
 
@@ -143,6 +171,10 @@ void dequeue_cat(struct uring* u) {
 
         [[maybe_unused]] struct io_uring_cqe* cqe =
             &u->cr.cqes[head & *u->cr.ring_mask];
+
+        struct msg* payload = mem + cqe->user_data;
+
+        printf("msg len %u\n", payload->len);
 
         printf("%s\n", payload->msg);
 
@@ -204,76 +236,46 @@ void mmap_cq(struct uring* u, struct io_uring_params* params, __s32 fd) {
     u->cr.cqes = cq_ptr + params->cq_off.cqes;
 }
 
-struct uring* uring_new() {
-    struct uring* u = calloc(1, sizeof(struct uring));
-
+void uring_init(struct uring* u) {
     if (!u) die("calloc");
 
     struct io_uring_params params = { 0 };
 
-    u->fd = io_uring_setup(1, &params);
+    u->fd = io_uring_setup(10, &params);
 
     if (u->fd < 0) die("io_uring_setup");
 
     mmap_sq(u, &params);
-
-    return u;
 }
 
-int main(int argc, char** argv) {
-    if (argc == 3) {
-        __s32 fd = atoi(argv[1]);
+struct entry {
+    off_t off;
+    void* data;
+};
 
-        __s32 pidfd = pidfd_open(getppid());
+void* shm_init(size_t blocks) {
+    __s32 memfd = shm_open("uring_shm", O_CREAT | O_RDWR, S_IRWXU);
 
-        if (pidfd == -1) die("pidfd_getfd");
+    if (memfd == -1) die("shm_open");
 
-        __s32 wq_fd = pidfd_getfd(pidfd, fd);
+    if (ftruncate(memfd, BLOCK_SIZE * blocks) == -1) die("ftruncate");
 
-        if (wq_fd == -1) die("pidfd_getfd");
+    void* map = mmap(0, file_size(memfd), PROT_READ | PROT_WRITE,
+                     MAP_SHARED | MAP_POPULATE, memfd, 0);
 
-        printf("reading on child, pid = %d\n", getpid());
+    if (map == MAP_FAILED) die("mmap");
 
-        struct io_uring_params params = { 0 };
-        struct uring u;
+    return map;
+}
 
-        mmap_cq(&u, &params, wq_fd);
+void* shm_from_file(char const* const file) {
+    __s32 memfd = shm_open(file, O_RDONLY, 0);
 
-        dequeue_cat(&u);
+    if (memfd == -1) die("shm_open");
 
-        return 0;
-    }
+    void* map = mmap(NULL, file_size(memfd), PROT_READ, MAP_SHARED, memfd, 0);
 
-    struct uring* u = uring_new();
+    if (map == MAP_FAILED) die("mmap");
 
-    int pid = fork();
-
-    if (pid == -1) {
-        die("fork");
-    } else if (pid == 0) {
-        char fd_str[256];
-
-        snprintf(fd_str, 256, "%d", u->fd);
-
-        char pid_str[256];
-        snprintf(pid_str, 256, "%d", getpid());
-
-        const char* path = argv[0];
-
-        char* argv[] = { "child", fd_str, pid_str, 0 };
-
-        if (execv(path, argv) == -1) die("execv");
-    } else {
-        const char* msg = "msg from parent";
-
-        queue_cat(u, msg, strlen(msg));
-
-        int status;
-
-        waitpid(pid, &status, 0);
-
-        printf("child exited with status = %d\n", status);
-    }
-
-    return 0;
+    return map;
 }

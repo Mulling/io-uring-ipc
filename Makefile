@@ -1,17 +1,21 @@
-IOUIPC_FLAGS := -std=gnu2x -Wall -Wextra -Werror -fsanitize=address,undefined -g ${CFLAGS}
+HRING_FLAGS := -std=gnu2x -Wall -Wextra -Werror -fsanitize=address,undefined -g ${CFLAGS}
 
 all: main
 
-main.o: main.c
-	$(CC) ${IOUIPC_FLAGS} $^ -o $@ -c
+main.o: bench/main.c half_uring.h
+	$(CC) ${HRING_FLAGS} -I./ bench/main.c -o $@ -c
 
 main: main.o
-	$(CC) ${IOUIPC_FLAGS} $^ -o $@
+	$(CC) ${HRING_FLAGS} $^ -o $@
 
+t: test
 test: all
 	./main
+
+bear: clean
+	bear -- $(MAKE)
 
 clean:
 	$(RM) main *.o compile_commands.json
 
-.PHONY: test clean
+.PHONY: t test clean bear
