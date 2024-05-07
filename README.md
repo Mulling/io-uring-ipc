@@ -8,12 +8,12 @@ One of the limitations of this approach is that the yama security model prevents
 
 Another option is to disable it completely.
 
-```shell
-# echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
+```sh
+echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
 ```
 
 ### Building:
 
-```shell
-$ make test
+```sh
+make test
 ```
