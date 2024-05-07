@@ -32,25 +32,20 @@ int main(int argc, char** argv) {
 
         if (wq_fd == -1) die("pidfd_getfd");
 
-        printf("reading on child, pid = %d\n", getpid());
+        struct hring h;
 
-        struct io_uring_params params = { 0 };
-        struct uring u;
-
-        mmap_cq(&u, &params, wq_fd);
-
-        void* mem = shm_from_file("uring_shm");
+        hring_attatch(&h, "uring_shm", wq_fd);
 
         for (size_t i = 0; i < 10; i++) {
-            dequeue(&u, mem);
+            dequeue(&h);
         }
 
         return 0;
     }
 
-    struct uring u = { 0 };
+    struct hring h = { 0 };
 
-    uring_init(&u);
+    hring_init(&h, 10);
 
     int pid = fork();
 
@@ -59,7 +54,7 @@ int main(int argc, char** argv) {
     } else if (pid == 0) {
         char fd_str[256];
 
-        snprintf(fd_str, 256, "%d", u.fd);
+        snprintf(fd_str, 256, "%d", h.fd);
 
         char pid_str[256];
         snprintf(pid_str, 256, "%d", getpid());
@@ -71,15 +66,15 @@ int main(int argc, char** argv) {
         if (execv(path, argv) == -1) die("execv");
     } else {
         const char* msg[] = {
-            "message 0", "message 1", "message 2", "message 3", "message 4",
-            "message 5", "message 6", "message 7", "message 8", "message 9",
+            "message from parent 0", "message from parent 1",
+            "message from parent 2", "message from parent 3",
+            "message from parent 4", "message from parent 5",
+            "message from parent 6", "message from parent 7",
+            "message from parent 8", "message from parent 9",
         };
 
-        void* mem = shm_init(10);
-
         for (size_t i = 0; i < 10; i++) {
-            queue(&u, msg[i], strlen(msg[i]), mem + BLOCK_SIZE * i,
-                  BLOCK_SIZE * i);
+            queue(&h, msg[i], strlen(msg[i]), BLOCK_SIZE * i);
         }
 
         int status;
