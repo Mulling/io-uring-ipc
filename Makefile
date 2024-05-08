@@ -2,7 +2,7 @@ HRING_FLAGS := -std=gnu2x -Wall -Wextra -Wpedantic -fsanitize=address,undefined 
 
 all: main
 
-main.o: bench/main.c half_uring.h
+main.o: bench/main.c hring.h
 	$(CC) ${HRING_FLAGS} -I./ bench/main.c -o $@ -c
 
 main: main.o
