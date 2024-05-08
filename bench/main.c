@@ -43,6 +43,10 @@ int main(int argc, char** argv) {
 
     printf("bitmap %X\n", bitmap[0]);
 
+    bitmap_free(&shm, e);
+
+    printf("bitmap %X\n", bitmap[0]);
+
     if (argc == 3) {
         __s32 fd = atoi(argv[1]);
 

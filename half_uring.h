@@ -115,6 +115,20 @@ inline void bitmap_alloc(struct mm* shm, size_t i) {
     bitmap[i / 8] |= (0x01 << (0x07 ^ (i & 0x07)));
 }
 
+[[gnu::always_inline]]
+inline void bitmap_free(struct mm* shm, struct entry e) {
+    __u8* bitmap = shm->bitmap;
+
+    size_t size = e.len / BLOCK_SIZE;
+    if (size % BLOCK_SIZE) size++;
+
+    // TODO: Cleanup
+
+    for (size_t i = e.off / BLOCK_SIZE; i < size + e.off / BLOCK_SIZE; i++) {
+        bitmap[i / 8] &= ~(0x01 << (0x07 ^ (i - 1 & 0x07)));
+    }
+}
+
 struct entry shmalloc(struct mm* shm, size_t size) {
     struct entry e = { 0 };
 
