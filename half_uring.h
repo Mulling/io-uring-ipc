@@ -15,15 +15,15 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#define HRING_SQ true
-#define HRING_CQ false
+#define HRING_SQ 1
+#define HRING_CQ 0
 
 #define mem_barrier() __asm__ __volatile__("" ::: "memory")
 
 #define die(s) (perror(s), exit(1))
 
-struct smem {
-    size_t blocks;
+struct mm {
+    __u32 blocks;
     __u8* bitmap;
     void* map;
 };
@@ -50,37 +50,12 @@ struct hring {
     int fd;
     bool kind;
 
-    struct smem mem;
+    struct mm shm;
 
     union {
         struct sring sr;
         struct cring cr;
     };
-};
-
-struct uring {
-    int fd;
-
-    struct {
-        __u32* head;
-        __u32* tail;
-        __u32* ring_mask;
-        __u32* ring_entries;
-        __u32* flags;
-        __u32* array;
-
-    } sr;
-
-    struct io_uring_sqe* sqes;
-
-    struct {
-        __u32* head;
-        __u32* tail;
-        __u32* ring_mask;
-        __u32* ring_entries;
-        struct io_uring_cqe* cqes;
-
-    } cr;
 };
 
 struct msg {
@@ -119,8 +94,61 @@ inline __s32 pidfd_open(__s32 ppid) {
     return (__s32)syscall(SYS_pidfd_open, ppid, 0);
 }
 
+struct entry {
+    size_t off;
+    size_t len;
+};
+
+[[gnu::always_inline]]
+inline bool bitmap_index_used(struct mm* shm, size_t i) {
+    __u8* bitmap = shm->bitmap;
+
+    mem_barrier();
+    return bitmap[i / 8] & (0x01 << (0x07 ^ (i & 0x07)));
+}
+
+[[gnu::always_inline]]
+inline void bitmap_alloc(struct mm* shm, size_t i) {
+    __u8* bitmap = shm->bitmap;
+
+    mem_barrier();
+    bitmap[i / 8] |= (0x01 << (0x07 ^ (i & 0x07)));
+}
+
+struct entry shmalloc(struct mm* shm, size_t size) {
+    struct entry e = { 0 };
+
+    if (size > shm->blocks * BLOCK_SIZE) {
+        return e;
+    }
+
+    size_t t = size / BLOCK_SIZE;
+    if (size % BLOCK_SIZE) t++;
+
+    for (size_t i = 0, f = 0; i < shm->blocks; i++) {
+        if (f == t) {
+            for (size_t j = (i - f); j < i; j++) bitmap_alloc(shm, j);
+
+            e.len = size;
+            e.off = (i - f + 1) * BLOCK_SIZE;
+            return e;
+        }
+
+        if (bitmap_index_used(shm, i)) {
+            f = 0;
+            continue;
+        }
+
+        ++f;
+    }
+
+    return e;
+}
+
+void shfree(struct entry e) {}
+
 int queue(struct hring* h, char const* msg, size_t len, off_t off) {
-    struct msg* payload = h->mem.map + off;
+    struct msg* payload = h->shm.map + off;
     payload->len = len;
 
     if (!memcpy(payload->msg, msg, len + 1)) die("memcpy");
@@ -173,7 +201,7 @@ void dequeue(struct hring* h) {
         [[maybe_unused]] struct io_uring_cqe* cqe =
             &h->cr.cqes[head & *h->cr.ring_mask];
 
-        struct msg* payload = h->mem.map + cqe->user_data;
+        struct msg* payload = h->shm.map + cqe->user_data;
 
         printf("msg len %u\n", payload->len);
 
@@ -253,9 +281,9 @@ void hring_init(struct hring* h, size_t blocks) {
 
     void* mem = shm_init(blocks + 1);
 
-    h->mem.blocks = blocks;
-    h->mem.bitmap = mem;
-    h->mem.map = mem + BLOCK_SIZE;
+    h->shm.blocks = blocks;
+    h->shm.bitmap = mem;
+    h->shm.map = mem + BLOCK_SIZE;
 }
 
 void* shm_from_file(char const* const file);
@@ -269,15 +297,10 @@ void hring_attatch(struct hring* h, char const* const file, __s32 fd) {
 
     void* map = shm_from_file(file);
 
-    h->mem.blocks = 10;
-    h->mem.bitmap = map;
-    h->mem.map = map + BLOCK_SIZE;
+    h->shm.blocks = 10;
+    h->shm.bitmap = map;
+    h->shm.map = map + BLOCK_SIZE;
 }
-
-struct entry {
-    off_t off;
-    void* data;
-};
 
 void* shm_init(size_t blocks) {
     __s32 memfd = shm_open("uring_shm", O_CREAT | O_RDWR, S_IRWXU);

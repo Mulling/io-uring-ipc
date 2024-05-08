@@ -21,6 +21,28 @@
 #define die(s) (perror(s), exit(1))
 
 int main(int argc, char** argv) {
+    __u8 bitmap[BLOCK_SIZE] = { 0 };
+
+    bitmap[0] = 0b11010001;
+
+    struct mm shm = {
+        .blocks = 8,
+        .bitmap = bitmap,
+        .map = NULL,
+    };
+
+    assert(bitmap_index_used(&shm, 0) == true);
+    assert(bitmap_index_used(&shm, 1) == true);
+    assert(bitmap_index_used(&shm, 7) == true);
+    assert(bitmap_index_used(&shm, 8) == false);
+
+    struct entry e = shmalloc(&shm, 1025);
+
+    printf("e.off %lu\n", e.off);
+    printf("e.len %lu\n", e.len);
+
+    printf("bitmap %X\n", bitmap[0]);
+
     if (argc == 3) {
         __s32 fd = atoi(argv[1]);
 
