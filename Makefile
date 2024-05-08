@@ -1,4 +1,4 @@
-HRING_FLAGS := -std=gnu2x -Wall -Wextra -Wpedantic -fsanitize=address,undefined -g ${CFLAGS}
+HRING_FLAGS := -std=gnu2x -Wall -Wextra -Wpedantic -fsanitize=address,undefined -Wno-pointer-arith -g ${CFLAGS}
 
 all: main
 

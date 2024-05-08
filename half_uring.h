@@ -100,33 +100,20 @@ struct entry {
 };
 
 [[gnu::always_inline]]
-inline bool bitmap_index_used(struct mm* shm, size_t i) {
-    __u8* bitmap = shm->bitmap;
-
+inline bool bitmap_index_used(__u8* bitmap, size_t i) {
     mem_barrier();
     return bitmap[i / 8] & (0x01 << (0x07 ^ (i & 0x07)));
 }
 
 [[gnu::always_inline]]
-inline void bitmap_alloc(struct mm* shm, size_t i) {
-    __u8* bitmap = shm->bitmap;
-
+inline void bitmap_alloc(__u8* bitmap, size_t i) {
     mem_barrier();
     bitmap[i / 8] |= (0x01 << (0x07 ^ (i & 0x07)));
 }
 
 [[gnu::always_inline]]
-inline void bitmap_free(struct mm* shm, struct entry e) {
-    __u8* bitmap = shm->bitmap;
-
-    size_t size = e.len / BLOCK_SIZE;
-    if (size % BLOCK_SIZE) size++;
-
-    // TODO: Cleanup
-
-    for (size_t i = e.off / BLOCK_SIZE; i < size + e.off / BLOCK_SIZE; i++) {
-        bitmap[i / 8] &= ~(0x01 << (0x07 ^ (i - 1 & 0x07)));
-    }
+inline void bitmap_free(__u8* bitmap, size_t i) {
+    bitmap[i / 8] &= ~(0x01 << (0x07 ^ (i & 0x07)));
 }
 
 struct entry shmalloc(struct mm* shm, size_t size) {
@@ -141,14 +128,14 @@ struct entry shmalloc(struct mm* shm, size_t size) {
 
     for (size_t i = 0, f = 0; i < shm->blocks; i++) {
         if (f == t) {
-            for (size_t j = (i - f); j < i; j++) bitmap_alloc(shm, j);
+            for (size_t j = (i - f); j < i; j++) bitmap_alloc(shm->bitmap, j);
 
             e.len = size;
             e.off = (i - f + 1) * BLOCK_SIZE;
             return e;
         }
 
-        if (bitmap_index_used(shm, i)) {
+        if (bitmap_index_used(shm->bitmap, i)) {
             f = 0;
             continue;
         }
@@ -159,7 +146,16 @@ struct entry shmalloc(struct mm* shm, size_t size) {
     return e;
 }
 
-void shfree(struct entry e) {}
+void shmfree(struct mm* shm, struct entry e) {
+    size_t size = e.len / BLOCK_SIZE;
+    if (size % BLOCK_SIZE) size++;
+
+    size_t off = e.off / BLOCK_SIZE;
+
+    for (size_t i = off; i < size + off; i++) {
+        bitmap_free(shm->bitmap, i - 1);
+    }
+}
 
 int queue(struct hring* h, char const* msg, size_t len, off_t off) {
     struct msg* payload = h->shm.map + off;

@@ -31,10 +31,10 @@ int main(int argc, char** argv) {
         .map = NULL,
     };
 
-    assert(bitmap_index_used(&shm, 0) == true);
-    assert(bitmap_index_used(&shm, 1) == true);
-    assert(bitmap_index_used(&shm, 7) == true);
-    assert(bitmap_index_used(&shm, 8) == false);
+    assert(bitmap_index_used(shm.bitmap, 0) == true);
+    assert(bitmap_index_used(shm.bitmap, 1) == true);
+    assert(bitmap_index_used(shm.bitmap, 7) == true);
+    assert(bitmap_index_used(shm.bitmap, 8) == false);
 
     struct entry e = shmalloc(&shm, 1025);
 
@@ -43,7 +43,7 @@ int main(int argc, char** argv) {
 
     printf("bitmap %X\n", bitmap[0]);
 
-    bitmap_free(&shm, e);
+    shmfree(&shm, e);
 
     printf("bitmap %X\n", bitmap[0]);
 
