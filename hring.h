@@ -64,7 +64,7 @@ struct entry {
 };
 
 [[gnu::always_inline]]
-inline size_t file_size(int fd) {
+static inline size_t file_size(int fd) {
     struct stat s;
 
     if (fstat(fd, &s) < 0) die("stat");
@@ -95,19 +95,19 @@ inline __s32 pidfd_open(__s32 ppid) {
 }
 
 [[gnu::always_inline]]
-inline bool bitmap_index_used(__u8* bitmap, size_t i) {
+static inline bool bitmap_index_used(__u8* bitmap, size_t i) {
     mem_barrier();
     return bitmap[i / 8] & (0x01 << (0x07 ^ (i & 0x07)));
 }
 
 [[gnu::always_inline]]
-inline void bitmap_alloc(__u8* bitmap, size_t i) {
+static inline void bitmap_alloc(__u8* bitmap, size_t i) {
     mem_barrier();
     bitmap[i / 8] |= (0x01 << (0x07 ^ (i & 0x07)));
 }
 
 [[gnu::always_inline]]
-inline void bitmap_free(__u8* bitmap, size_t i) {
+static inline void bitmap_free(__u8* bitmap, size_t i) {
     bitmap[i / 8] &= ~(0x01 << (0x07 ^ (i & 0x07)));
 }
 
@@ -156,8 +156,8 @@ void hring_free(struct mm* shm, struct entry e) {
 }
 
 [[gnu::always_inline]]
-inline void* hring_entry_addr(struct hring const* h,
-                              struct entry const* const e) {
+static inline void* hring_entry_addr(struct hring const* h,
+                                     struct entry const* const e) {
     return h->shm.map + e->off;
 }
 
@@ -270,7 +270,34 @@ static void mmap_cq(struct hring* h, struct io_uring_params* params, __s32 fd) {
     h->cr.cqes = cq_ptr + params->cq_off.cqes;
 }
 
-void* shm_init(size_t blocks);
+static void* shm_init(size_t blocks) {
+    __s32 memfd = shm_open("uring_shm", O_CREAT | O_RDWR, S_IRWXU);
+
+    if (memfd == -1) die("shm_open");
+
+    if (ftruncate(memfd, BLOCK_SIZE * blocks) == -1) die("ftruncate");
+
+    void* map = mmap(0, file_size(memfd), PROT_READ | PROT_WRITE,
+                     MAP_SHARED | MAP_POPULATE, memfd, 0);
+
+    if (map == MAP_FAILED) die("mmap");
+
+    if (!memset(map, 0, BLOCK_SIZE * blocks)) die("memset");
+
+    return map;
+}
+
+static void* shm_from_file(char const* const file) {
+    __s32 memfd = shm_open(file, O_RDONLY, 0);
+
+    if (memfd == -1) die("shm_open");
+
+    void* map = mmap(NULL, file_size(memfd), PROT_READ, MAP_SHARED, memfd, 0);
+
+    if (map == MAP_FAILED) die("mmap");
+
+    return map;
+}
 
 void hring_init(struct hring* h, size_t blocks) {
     struct io_uring_params params = { 0 };
@@ -289,8 +316,6 @@ void hring_init(struct hring* h, size_t blocks) {
     h->shm.map = mem + BLOCK_SIZE;
 }
 
-void* shm_from_file(char const* const file);
-
 void hring_attatch(struct hring* h, char const* const file, __s32 fd) {
     struct io_uring_params params = { 0 };
 
@@ -303,33 +328,4 @@ void hring_attatch(struct hring* h, char const* const file, __s32 fd) {
     h->shm.blocks = 100;
     h->shm.bitmap = map;
     h->shm.map = map + BLOCK_SIZE;
-}
-
-void* shm_init(size_t blocks) {
-    __s32 memfd = shm_open("uring_shm", O_CREAT | O_RDWR, S_IRWXU);
-
-    if (memfd == -1) die("shm_open");
-
-    if (ftruncate(memfd, BLOCK_SIZE * blocks) == -1) die("ftruncate");
-
-    void* map = mmap(0, file_size(memfd), PROT_READ | PROT_WRITE,
-                     MAP_SHARED | MAP_POPULATE, memfd, 0);
-
-    if (map == MAP_FAILED) die("mmap");
-
-    if (!memset(map, 0, BLOCK_SIZE * blocks)) die("memset");
-
-    return map;
-}
-
-void* shm_from_file(char const* const file) {
-    __s32 memfd = shm_open(file, O_RDONLY, 0);
-
-    if (memfd == -1) die("shm_open");
-
-    void* map = mmap(NULL, file_size(memfd), PROT_READ, MAP_SHARED, memfd, 0);
-
-    if (map == MAP_FAILED) die("mmap");
-
-    return map;
 }
