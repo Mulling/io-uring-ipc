@@ -16,37 +16,9 @@
 
 #include "hring.h"
 
-#define mem_barrier() __asm__ __volatile__("" ::: "memory")
-
 #define die(s) (perror(s), exit(1))
 
 int main(int argc, char** argv) {
-    __u8 bitmap[BLOCK_SIZE] = { 0 };
-
-    bitmap[0] = 0b11010001;
-
-    struct mm shm = {
-        .blocks = 8,
-        .bitmap = bitmap,
-        .map = NULL,
-    };
-
-    assert(bitmap_index_used(shm.bitmap, 0) == true);
-    assert(bitmap_index_used(shm.bitmap, 1) == true);
-    assert(bitmap_index_used(shm.bitmap, 7) == true);
-    assert(bitmap_index_used(shm.bitmap, 8) == false);
-
-    struct entry e = shmalloc(&shm, 1025);
-
-    printf("e.off %lu\n", e.off);
-    printf("e.len %lu\n", e.len);
-
-    printf("bitmap %X\n", bitmap[0]);
-
-    shmfree(&shm, e);
-
-    printf("bitmap %X\n", bitmap[0]);
-
     if (argc == 3) {
         __s32 fd = atoi(argv[1]);
 
@@ -62,16 +34,14 @@ int main(int argc, char** argv) {
 
         hring_attatch(&h, "uring_shm", wq_fd);
 
-        for (size_t i = 0; i < 10; i++) {
-            dequeue(&h);
-        }
+        for (size_t i = 0; i < 10; i++) hring_deque(&h);
 
         return 0;
     }
 
     struct hring h = { 0 };
 
-    hring_init(&h, 10);
+    hring_init(&h, 100);
 
     int pid = fork();
 
@@ -100,7 +70,15 @@ int main(int argc, char** argv) {
         };
 
         for (size_t i = 0; i < 10; i++) {
-            queue(&h, msg[i], strlen(msg[i]), BLOCK_SIZE * i);
+            struct entry e = hring_alloc(&h, 1);
+
+            struct msg* payload = (struct msg*)hring_entry_addr(&h, &e);
+
+            payload->len = strlen(msg[i]);
+
+            if (!memcpy(payload->msg, msg[i], payload->len)) die("memcpy");
+
+            hring_queue(&h, &e);
         }
 
         int status;
