@@ -63,11 +63,6 @@ struct entry {
     size_t len;
 };
 
-struct msg {
-    __u16 len;
-    __u8 msg[];
-};
-
 [[gnu::always_inline]]
 inline size_t file_size(int fd) {
     struct stat s;
@@ -202,7 +197,7 @@ int hring_queue(struct hring* h, struct entry const* const e) {
     return 0;
 }
 
-void hring_deque(struct hring* h) {
+void hring_deque(struct hring* h, void (*cb)(size_t, void*)) {
     __u32 head = *h->cr.head;
 
     do {
@@ -213,12 +208,7 @@ void hring_deque(struct hring* h) {
         [[maybe_unused]] struct io_uring_cqe* cqe =
             &h->cr.cqes[head & *h->cr.ring_mask];
 
-        printf("off = %llu\n", cqe->user_data);
-
-        struct msg* payload = h->shm.map + cqe->user_data;
-
-        printf("len = %d\n", payload->len);
-        printf("msg = %s\n", payload->msg);
+        cb(cqe->user_data, h->shm.map + cqe->user_data);
 
         head++;
 

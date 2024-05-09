@@ -18,6 +18,19 @@
 
 #define die(s) (perror(s), exit(1))
 
+struct msg {
+    __u16 len;
+    __u8 msg[];
+};
+
+void print_msg_cb(size_t off, void* data) {
+    struct msg* payload = data;
+
+    printf("off = %zu\n", off);
+    printf("len = %d\n", payload->len);
+    printf("msg = %s\n", payload->msg);
+}
+
 int main(int argc, char** argv) {
     if (argc == 3) {
         __s32 fd = atoi(argv[1]);
@@ -34,7 +47,7 @@ int main(int argc, char** argv) {
 
         hring_attatch(&h, "uring_shm", wq_fd);
 
-        for (size_t i = 0; i < 10; i++) hring_deque(&h);
+        for (size_t i = 0; i < 10; i++) hring_deque(&h, print_msg_cb);
 
         return 0;
     }
