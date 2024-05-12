@@ -19,3 +19,4 @@ clean:
 	$(RM) main *.o compile_commands.json
 
 .PHONY: t test clean bear
+.EXTRA_PREREQS := $(abspath $(lastword $(MAKEFILE_LIST)))
