@@ -22,7 +22,7 @@
 
 #define die(s) (perror(s), exit(1))
 
-struct mm {
+struct smm {
     __u32 blocks;
     __u8* bitmap;
     void* map;
@@ -50,7 +50,7 @@ struct hring {
     int fd;
     bool kind;
 
-    struct mm shm;
+    struct smm sm;
 
     union {
         struct sring sr;
@@ -74,14 +74,14 @@ static inline size_t file_size(int fd) {
 
 [[gnu::always_inline]]
 inline __s32 io_uring_setup(__u32 entries, struct io_uring_params* p) {
-    return (int)syscall(__NR_io_uring_setup, entries, p);
+    return (__s32)syscall(__NR_io_uring_setup, entries, p);
 }
 
 [[gnu::always_inline]]
 inline __s32 io_uring_enter(int fd, unsigned int to_submit,
                             unsigned int min_complete, unsigned int flags) {
-    return (int)syscall(__NR_io_uring_enter, fd, to_submit, min_complete, flags,
-                        NULL, 0);
+    return (__s32)syscall(__NR_io_uring_enter, fd, to_submit, min_complete,
+                          flags, NULL, 0);
 }
 
 [[gnu::always_inline]]
@@ -96,19 +96,20 @@ inline __s32 pidfd_open(__s32 ppid) {
 
 [[gnu::always_inline]]
 static inline bool bitmap_index_used(__u8* bitmap, size_t i) {
-    mem_barrier();
+    mem_barrier();  // XXX: Assert if needed
     return bitmap[i / 8] & (0x01 << (0x07 ^ (i & 0x07)));
 }
 
 [[gnu::always_inline]]
 static inline void bitmap_alloc(__u8* bitmap, size_t i) {
-    mem_barrier();
     bitmap[i / 8] |= (0x01 << (0x07 ^ (i & 0x07)));
+    mem_barrier();  // XXX: Assert if needed
 }
 
 [[gnu::always_inline]]
 static inline void bitmap_free(__u8* bitmap, size_t i) {
     bitmap[i / 8] &= ~(0x01 << (0x07 ^ (i & 0x07)));
+    mem_barrier();  // XXX: Assert if needed
 }
 
 [[gnu::always_inline]]
@@ -119,46 +120,45 @@ inline size_t blocks(size_t size) {
 struct entry hring_alloc(struct hring* h, size_t size) {
     struct entry e = { 0 };
 
-    if (size > h->shm.blocks * BLOCK_SIZE) {
+    if (size > h->sm.blocks * BLOCK_SIZE) {
         return e;
     }
 
     size_t t = blocks(size);
 
-    for (size_t i = 0, f = 0; i < h->shm.blocks; i++) {
-        if (f == t) {
-            for (size_t j = (i - f); j < i; j++) bitmap_alloc(h->shm.bitmap, j);
-
-            e.len = size;
-            e.off = (i - f) * BLOCK_SIZE;
-            return e;
-        }
-
-        if (bitmap_index_used(h->shm.bitmap, i)) {
+    for (size_t i = 0, f = 0; i < h->sm.blocks; i++) {
+        if (bitmap_index_used(h->sm.bitmap, i)) {
             f = 0;
             continue;
         }
 
         f += 1;
+
+        if (f == t) {
+            for (size_t j = ((i + 1) - f); j < (i + 1); j++)
+                bitmap_alloc(h->sm.bitmap, j);
+
+            e.len = size;
+            e.off = ((i + 1) - f);
+            return e;
+        }
     }
 
     return e;
 }
 
-void hring_free(struct mm* shm, struct entry e) {
+void hring_free(struct hring* h, struct entry e) {
     size_t size = blocks(e.len);
 
-    size_t off = e.off / BLOCK_SIZE;
-
-    for (size_t i = off; i < size + off; i++) {
-        bitmap_free(shm->bitmap, i - 1);
+    for (size_t i = 0; i < size; i++) {
+        bitmap_free(h->sm.bitmap, e.off + i);
     }
 }
 
 [[gnu::always_inline]]
-static inline void* hring_entry_addr(struct hring const* h,
-                                     struct entry const* const e) {
-    return h->shm.map + e->off;
+static inline void* hring_deref(struct hring const* h,
+                                struct entry const* const e) {
+    return h->sm.map + e->off * BLOCK_SIZE;
 }
 
 int hring_queue(struct hring* h, struct entry const* const e) {
@@ -177,7 +177,7 @@ int hring_queue(struct hring* h, struct entry const* const e) {
     h->sr.sqes[index].flags = 0;
     h->sr.sqes[index].opcode = IORING_OP_NOP;
     h->sr.sqes[index].addr = 0;
-    h->sr.sqes[index].len = e->len;
+    h->sr.sqes[index].len = 0;
     h->sr.sqes[index].off = 0;
     h->sr.sqes[index].user_data = (__u64)e->off;
 
@@ -190,9 +190,8 @@ int hring_queue(struct hring* h, struct entry const* const e) {
         mem_barrier();
     }
 
-    int ret = io_uring_enter(h->fd, 1, 1, IORING_ENTER_GETEVENTS);
-
-    if (ret < 0) die("io_uring_enter");
+    if (io_uring_enter(h->fd, 1, 1, IORING_ENTER_GETEVENTS) == -1)
+        die("io_uring_enter");
 
     return 0;
 }
@@ -205,10 +204,9 @@ void hring_deque(struct hring* h, void (*cb)(size_t, void*)) {
 
         if (head == *h->cr.tail) break;
 
-        [[maybe_unused]] struct io_uring_cqe* cqe =
-            &h->cr.cqes[head & *h->cr.ring_mask];
+        struct io_uring_cqe* cqe = &h->cr.cqes[head & *h->cr.ring_mask];
 
-        cb(cqe->user_data, h->shm.map + cqe->user_data);
+        cb(cqe->user_data, h->sm.map + ((__u64)cqe->user_data * BLOCK_SIZE));
 
         head++;
 
@@ -238,11 +236,10 @@ static void mmap_sq(struct hring* h, struct io_uring_params* params) {
     h->sr.flags = sq_ptr + params->sq_off.flags;
     h->sr.array = sq_ptr + params->sq_off.array;
 
-    h->sr.sqes = mmap(0, params->sq_entries * sizeof(struct io_uring_sqe),
-                      PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, h->fd,
-                      IORING_OFF_SQES);
-
-    if (h->sr.sqes == MAP_FAILED) die("mmap");
+    if ((h->sr.sqes = mmap(0, params->sq_entries * sizeof(struct io_uring_sqe),
+                           PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE,
+                           h->fd, IORING_OFF_SQES)) == MAP_FAILED)
+        die("mmap");
 }
 
 static void mmap_cq(struct hring* h, struct io_uring_params* params, __s32 fd) {
@@ -250,9 +247,8 @@ static void mmap_cq(struct hring* h, struct io_uring_params* params, __s32 fd) {
         params->flags |= IORING_SETUP_ATTACH_WQ;
         params->wq_fd = fd;
 
-        h->fd = io_uring_setup(1, params);
-
-        if (h->fd == -1) die("io_uring_setup");
+        if ((h->fd = io_uring_setup(h->sm.blocks, params)) == -1)
+            die("io_uring_setup");
     }
 
     size_t ring_size =
@@ -270,62 +266,62 @@ static void mmap_cq(struct hring* h, struct io_uring_params* params, __s32 fd) {
     h->cr.cqes = cq_ptr + params->cq_off.cqes;
 }
 
-static void* shm_init(size_t blocks) {
+static struct smm smm_init(size_t blocks) {
+    struct smm sm = { .blocks = blocks };
+
     __s32 memfd = shm_open("uring_shm", O_CREAT | O_RDWR, S_IRWXU);
 
     if (memfd == -1) die("shm_open");
 
-    if (ftruncate(memfd, BLOCK_SIZE * blocks) == -1) die("ftruncate");
+    if (ftruncate(memfd, BLOCK_SIZE * (blocks + 1)) == -1) die("ftruncate");
 
-    void* map = mmap(0, file_size(memfd), PROT_READ | PROT_WRITE,
-                     MAP_SHARED | MAP_POPULATE, memfd, 0);
+    if ((sm.bitmap = mmap(0, BLOCK_SIZE * (blocks + 1), PROT_READ | PROT_WRITE,
+                          MAP_SHARED | MAP_POPULATE, memfd, 0)) == MAP_FAILED)
+        die("mmap");
 
-    if (map == MAP_FAILED) die("mmap");
+    if (!memset(sm.bitmap, 0, BLOCK_SIZE * blocks)) die("memset");
 
-    if (!memset(map, 0, BLOCK_SIZE * blocks)) die("memset");
+    sm.map = sm.bitmap + BLOCK_SIZE;
 
-    return map;
+    return sm;
 }
 
-static void* shm_from_file(char const* const file) {
+static struct smm smm_from_file(char const* const file) {
+    struct smm sm = { 0 };
+
     __s32 memfd = shm_open(file, O_RDONLY, 0);
+
+    size_t size = file_size(memfd);
+
+    sm.blocks = blocks(size) - 1;
 
     if (memfd == -1) die("shm_open");
 
-    void* map = mmap(NULL, file_size(memfd), PROT_READ, MAP_SHARED, memfd, 0);
+    sm.bitmap = mmap(NULL, file_size(memfd), PROT_READ, MAP_SHARED, memfd, 0);
 
-    if (map == MAP_FAILED) die("mmap");
+    if (sm.bitmap == MAP_FAILED) die("mmap");
 
-    return map;
+    sm.map = sm.bitmap + BLOCK_SIZE;
+
+    return sm;
 }
 
 void hring_init(struct hring* h, size_t blocks) {
     struct io_uring_params params = { 0 };
 
-    h->fd = io_uring_setup(10, &params);
-    h->kind = HRING_SQ;
+    if ((h->fd = io_uring_setup(blocks, &params)) == -1) die("io_uring_setup");
 
-    if (h->fd < 0) die("io_uring_setup");
+    h->kind = HRING_SQ;
+    h->sm = smm_init(blocks);
 
     mmap_sq(h, &params);
-
-    void* mem = shm_init(blocks + 1);
-
-    h->shm.blocks = blocks;
-    h->shm.bitmap = mem;
-    h->shm.map = mem + BLOCK_SIZE;
 }
 
 void hring_attatch(struct hring* h, char const* const file, __s32 fd) {
     struct io_uring_params params = { 0 };
 
     h->kind = HRING_CQ;
+    h->sm = smm_from_file(file);
 
     mmap_cq(h, &params, fd);
-
-    void* map = shm_from_file(file);
-
-    h->shm.blocks = 100;
-    h->shm.bitmap = map;
-    h->shm.map = map + BLOCK_SIZE;
 }

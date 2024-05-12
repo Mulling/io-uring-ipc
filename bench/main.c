@@ -26,9 +26,7 @@ struct msg {
 void print_msg_cb(size_t off, void* data) {
     struct msg* payload = data;
 
-    printf("off = %zu\n", off);
-    printf("len = %d\n", payload->len);
-    printf("msg = %s\n", payload->msg);
+    printf("off = %10zu | len = %10d | msg = %s\n", off, payload->len, payload->msg);
 }
 
 int main(int argc, char** argv) {
@@ -47,14 +45,14 @@ int main(int argc, char** argv) {
 
         hring_attatch(&h, "uring_shm", wq_fd);
 
-        for (size_t i = 0; i < 10; i++) hring_deque(&h, print_msg_cb);
+        for (size_t i = 0; i < 1024; i++) hring_deque(&h, print_msg_cb);
 
         return 0;
     }
 
     struct hring h = { 0 };
 
-    hring_init(&h, 100);
+    hring_init(&h, 1024);
 
     int pid = fork();
 
@@ -82,14 +80,14 @@ int main(int argc, char** argv) {
             "message from parent 8", "message from parent 9",
         };
 
-        for (size_t i = 0; i < 10; i++) {
+        for (size_t i = 0; i < 1024; i++) {
             struct entry e = hring_alloc(&h, 1);
 
-            struct msg* payload = (struct msg*)hring_entry_addr(&h, &e);
+            struct msg* payload = (struct msg*)hring_deref(&h, &e);
 
-            payload->len = strlen(msg[i]);
+            payload->len = strlen(msg[i % 10]);
 
-            if (!memcpy(payload->msg, msg[i], payload->len)) die("memcpy");
+            if (!memcpy(payload->msg, msg[i % 10], payload->len)) die("memcpy");
 
             hring_queue(&h, &e);
         }
