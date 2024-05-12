@@ -307,7 +307,7 @@ static struct smm smm_from_file(char const* const file) {
 }
 
 void hring_init(struct hring* h, size_t blocks) {
-    struct io_uring_params params = { 0 };
+    struct io_uring_params params = { .flags = IORING_SETUP_SINGLE_ISSUER };
 
     if ((h->fd = io_uring_setup(blocks, &params)) == -1) die("io_uring_setup");
 
