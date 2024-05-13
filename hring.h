@@ -20,7 +20,7 @@
 
 #define mem_barrier() __asm__ __volatile__("" ::: "memory")
 
-#define die(s) (perror(s), exit(1))
+#define die(s) (printf(__FILE__ ":%d: ", __LINE__), perror(s), exit(1))
 
 struct smm {
     __u32 blocks;
@@ -109,6 +109,7 @@ static inline void bitmap_alloc(__u8* bitmap, size_t i) {
 [[gnu::always_inline]]
 static inline void bitmap_free(__u8* bitmap, size_t i) {
     bitmap[i / 8] &= ~(0x01 << (0x07 ^ (i & 0x07)));
+
     mem_barrier();  // XXX: Assert if needed
 }
 
@@ -148,6 +149,8 @@ struct entry hring_alloc(struct hring* h, size_t size) {
 }
 
 void hring_free(struct hring* h, struct entry e) {
+    printf("free entry .off = %lu\n", e.off);
+
     size_t size = blocks(e.len);
 
     for (size_t i = 0; i < size; i++) {
@@ -196,7 +199,7 @@ int hring_queue(struct hring* h, struct entry const* const e) {
     return 0;
 }
 
-void hring_deque(struct hring* h, void (*cb)(size_t, void*)) {
+void hring_deque(struct hring* h, void (*cb)(struct hring*, size_t, void*)) {
     __u32 head = *h->cr.head;
 
     do {
@@ -206,7 +209,7 @@ void hring_deque(struct hring* h, void (*cb)(size_t, void*)) {
 
         struct io_uring_cqe* cqe = &h->cr.cqes[head & *h->cr.ring_mask];
 
-        cb(cqe->user_data, h->sm.map + ((__u64)cqe->user_data * BLOCK_SIZE));
+        cb(h, cqe->user_data, h->sm.map + ((__u64)cqe->user_data * BLOCK_SIZE));
 
         head++;
 
@@ -289,7 +292,7 @@ static struct smm smm_init(size_t blocks) {
 static struct smm smm_from_file(char const* const file) {
     struct smm sm = { 0 };
 
-    __s32 memfd = shm_open(file, O_RDONLY, 0);
+    __s32 memfd = shm_open(file, O_RDWR, 0);
 
     size_t size = file_size(memfd);
 
@@ -297,7 +300,8 @@ static struct smm smm_from_file(char const* const file) {
 
     if (memfd == -1) die("shm_open");
 
-    sm.bitmap = mmap(NULL, file_size(memfd), PROT_READ, MAP_SHARED, memfd, 0);
+    sm.bitmap = mmap(NULL, file_size(memfd), PROT_READ | PROT_WRITE, MAP_SHARED,
+                     memfd, 0);
 
     if (sm.bitmap == MAP_FAILED) die("mmap");
 
@@ -324,4 +328,16 @@ void hring_attatch(struct hring* h, char const* const file, __s32 fd) {
     h->sm = smm_from_file(file);
 
     mmap_cq(h, &params, fd);
+}
+
+void pp_bitmap(__u8 const* const bitmap, __u32 blocks) {
+    for (__u32 i = 0; i < 1024 * blocks; i++) {
+        printf("%.2X", bitmap[i]);
+
+        if (((i + 1) % 32 == 0) || i == (1024 * blocks) - 1) {
+            printf("\n");
+        } else {
+            printf(" ");
+        }
+    }
 }

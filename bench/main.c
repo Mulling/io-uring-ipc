@@ -16,17 +16,27 @@
 
 #include "hring.h"
 
-#define die(s) (perror(s), exit(1))
+size_t target = 1024 * 2;
 
 struct msg {
     __u16 len;
     __u8 msg[];
 };
 
-void print_msg_cb(size_t off, void* data) {
+void print_msg_cb(struct hring* h, size_t off, void* data) {
     struct msg* payload = data;
 
-    printf("off = %10zu | len = %10d | msg = %s\n", off, payload->len, payload->msg);
+    printf("#%lu off = %10zu | len = %10d | msg = %s\n", target, off, payload->len,
+           payload->msg);
+
+    target--;
+
+    struct entry e = {
+        .off = off,
+        .len = 1,
+    };
+
+    hring_free(h, e);
 }
 
 int main(int argc, char** argv) {
@@ -45,7 +55,7 @@ int main(int argc, char** argv) {
 
         hring_attatch(&h, "uring_shm", wq_fd);
 
-        for (size_t i = 0; i < 1024; i++) hring_deque(&h, print_msg_cb);
+        while (target) hring_deque(&h, print_msg_cb);
 
         return 0;
     }
@@ -80,8 +90,15 @@ int main(int argc, char** argv) {
             "message from parent 8", "message from parent 9",
         };
 
-        for (size_t i = 0; i < 1024; i++) {
+        for (size_t i = 0; i < 1024 * 2; i++) {
+        try_again:;
             struct entry e = hring_alloc(&h, 1);
+
+            if (e.len == 0 && e.off == 0) {
+                puts("sleeping");
+                sleep(1);
+                goto try_again;
+            };
 
             struct msg* payload = (struct msg*)hring_deref(&h, &e);
 
@@ -95,6 +112,8 @@ int main(int argc, char** argv) {
         int status;
 
         waitpid(pid, &status, 0);
+
+        pp_bitmap(h.sm.bitmap, 1);
 
         printf("child exited with status = %d\n", status);
     }
