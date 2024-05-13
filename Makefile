@@ -9,7 +9,7 @@ main: main.o
 	$(CC) ${HRING_FLAGS} $^ -o $@
 
 t: test
-test: all
+test: main
 	./main
 
 compile_commands.json: Makefile
@@ -18,7 +18,7 @@ compile_commands.json: Makefile
 
 p: perf
 perf: HRING_FLAGS = -std=gnu23 -flto -O3 ${CFLAGS}
-perf: all
+perf: main
 	./main
 
 clean:
