@@ -20,13 +20,10 @@
 #define HRING_SQ 1
 #define HRING_CQ 0
 
-extern size_t target;
-extern size_t c;
-
 #define fence() __asm__ __volatile__("" ::: "memory")
 
-#define hring_addr_off(addr) 0xFFFFFFFF & addr
-#define hring_addr_len(addr) addr >> 32
+#define hring_addr_off(addr) (0xFFFFFFFF & (addr))
+#define hring_addr_len(addr) ((addr) >> 32)
 
 #define die(s) (printf(__FILE__ ":%d: ", __LINE__), perror(s), exit(1))
 
@@ -68,11 +65,6 @@ struct hring {
     };
 };
 
-struct entry {
-    size_t off;
-    size_t len;
-};
-
 [[gnu::always_inline]]
 static inline size_t file_size(int fd) {
     struct stat s;
@@ -105,22 +97,19 @@ inline __s32 pidfd_open(__s32 ppid) {
 }
 
 [[gnu::always_inline]]
-static inline bool bitmap_index_used(__u8* bitmap, size_t i) {
-    // __u8 r;
-    // __atomic_load(&bitmap[i / 8], &r, 0);
-    bool used = bitmap[i / 8] & (0x01 << (0x07 ^ (i & 0x07)));
-    return used;
+static inline bool bitmap_index_used(__u8* bitmap, __u32 i) {
+    return bitmap[i / 8] & (0x01 << (0x07 ^ (i & 0x07)));
 }
 
 [[gnu::always_inline]]
-static inline void bitmap_alloc(__u8* bitmap, size_t i) {
+static inline void bitmap_alloc(__u8* bitmap, __u32 i) {
     assert(!bitmap_index_used(bitmap, i));
 
     __atomic_fetch_or(&bitmap[i / 8], (0x01 << (0x07 ^ (i & 0x07))), 0);
 }
 
 [[gnu::always_inline]]
-static inline void bitmap_free(__u8* bitmap, size_t i) {
+static inline void bitmap_free(__u8* bitmap, __u32 i) {
     assert(bitmap_index_used(bitmap, i));
 
     __atomic_fetch_and(&bitmap[i / 8], ~(0x01 << (0x07 ^ (i & 0x07))), 0);
@@ -145,17 +134,16 @@ hring_addr_t hring_alloc(struct hring* h, size_t size) {
     return 0;
 }
 
-void hring_free(struct hring* h, struct entry e) {
-    bitmap_free(h->sm.bitmap, e.off);
+void hring_free(struct hring* h, hring_addr_t addr) {
+    bitmap_free(h->sm.bitmap, hring_addr_off(addr));
 }
 
 [[gnu::always_inline]]
-static inline void* hring_deref(struct hring const* h,
-                                struct entry const* const e) {
-    return h->sm.map + e->off * BLOCK_SIZE;
+static inline void* hring_deref(struct hring const* h, hring_addr_t addr) {
+    return h->sm.map + hring_addr_off(addr) * BLOCK_SIZE;
 }
 
-int hring_queue(struct hring* h, struct entry const* const e) {
+int hring_queue(struct hring* h, hring_addr_t e) {
     size_t next_tail = 0;
     size_t tail = 0;
     size_t index = 0;
@@ -173,7 +161,7 @@ int hring_queue(struct hring* h, struct entry const* const e) {
     h->sr.sqes[index].addr = 0;
     h->sr.sqes[index].len = 0;
     h->sr.sqes[index].off = 0;
-    h->sr.sqes[index].user_data = (__u64)e->off;
+    h->sr.sqes[index].user_data = e;
 
     h->sr.array[index] = index;
 
@@ -190,7 +178,8 @@ int hring_queue(struct hring* h, struct entry const* const e) {
     return 0;
 }
 
-void hring_deque(struct hring* h, void (*cb)(struct hring*, size_t, void*)) {
+void hring_deque(struct hring* h,
+                 void (*cb)(struct hring*, hring_addr_t, void*)) {
     __u32 head = *h->cr.head;
 
     do {
@@ -327,6 +316,22 @@ void pp_bitmap(struct hring const* const h) {
 
         for (size_t j = 0; j < 32; j++) {
             printf(" %.2X", h->sm.bitmap[j + i * 32]);
+        }
+
+        printf("\n");
+    }
+}
+
+void pp_addr(struct hring const* const h, hring_addr_t addr) {
+    __u32 off = hring_addr_off(addr);
+
+    __u8* data = hring_deref(h, addr);
+
+    for (size_t i = 0; i < BLOCK_SIZE >> 5; i++) {
+        printf("0x%.8zX:", off * BLOCK_SIZE + 32 * i);
+
+        for (size_t j = 0; j < 32; j++) {
+            printf(" %.2X", data[j + i * 32]);
         }
 
         printf("\n");

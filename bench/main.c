@@ -25,21 +25,18 @@ struct msg {
     __u8 msg[];
 };
 
-void print_msg_cb(struct hring* h, size_t off, void* data) {
+void print_msg_cb(struct hring* h, hring_addr_t addr, void* data) {
     struct msg* payload = data;
+
+    (void)payload;
 
     target--;
     c++;
 
-    struct entry e = {
-        .off = off,
-        .len = payload->len,
-    };
-
     // printf("#%lu off = %10zu | len = %10d | msg = %s\n", target, off,
     //        payload->len, payload->msg);
 
-    hring_free(h, e);
+    hring_free(h, addr);
 }
 
 int main(int argc, char** argv) {
@@ -64,8 +61,9 @@ int main(int argc, char** argv) {
 
         while (target) {
             if (time(NULL) - last >= 1) {
-                printf("%2.2F%%(%lu) - %1.2F Gib/s\n", c / (double)total * 100,
-                       c, (double)(c * BLOCK_SIZE) / (1024 * 1024 * 1024));
+                printf("deque %lu(%2.2F%%) messages, %1.2F Gib/s\n", c,
+                       c / (double)total * 100,
+                       (double)(c * BLOCK_SIZE) / (1024 * 1024 * 1024));
                 last = time(NULL);
                 c = 0;
             }
@@ -110,20 +108,17 @@ int main(int argc, char** argv) {
         try_again:;
             hring_addr_t addr = hring_alloc(&h, 1);
 
-            struct entry en = {
-                .off = hring_addr_off(addr),
-                .len = hring_addr_len(addr),
-            };
-
             if (!addr) goto try_again;
 
-            struct msg* payload = (struct msg*)hring_deref(&h, &en);
+            struct msg* payload = (struct msg*)hring_deref(&h, addr);
 
             payload->len = strlen(msg[i % 10]);
 
+            // pp_addr(&h, addr);
+
             if (!memcpy(payload->msg, msg[i % 10], payload->len)) die("memcpy");
 
-            hring_queue(&h, &en);
+            hring_queue(&h, addr);
         }
 
         int status;
