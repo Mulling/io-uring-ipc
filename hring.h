@@ -116,8 +116,13 @@ static inline void bitmap_free(__u8* bitmap, __u32 i) {
 }
 
 [[gnu::always_inline]]
-inline size_t blocks(size_t size) {
+static inline __u32 blocks(size_t size) {
     return size / BLOCK_SIZE + (size % BLOCK_SIZE != 0);
+}
+
+[[gnu::always_inline]]
+static inline __u32 hring_bitmap_blocks(struct hring const* const h) {
+    return h->sm.blocks / 8192 + (h->sm.blocks % 8192 != 0);
 }
 
 hring_addr_t hring_alloc(struct hring* h, size_t size) {
@@ -144,43 +149,44 @@ static inline void* hring_deref(struct hring const* h, hring_addr_t addr) {
 }
 
 int hring_queue(struct hring* h, hring_addr_t e) {
-    size_t next_tail = 0;
-    size_t tail = 0;
-    size_t index = 0;
+    register __u32 tail = 0;
+    register __u32 index = 0;
 
-    next_tail = tail = *h->sr.tail;
-    next_tail++;
+    tail = *h->sr.tail;
 
     fence();
 
     index = tail & *h->sr.ring_mask;
 
-    h->sr.sqes[index].fd = 0;
-    h->sr.sqes[index].flags = 0;
+    // h->sr.sqes[index].fd = 0;
+    // h->sr.sqes[index].flags = 0;
     h->sr.sqes[index].opcode = IORING_OP_NOP;
-    h->sr.sqes[index].addr = 0;
-    h->sr.sqes[index].len = 0;
-    h->sr.sqes[index].off = 0;
+    // h->sr.sqes[index].addr = 0;
+    // h->sr.sqes[index].len = 0;
+    // h->sr.sqes[index].off = 0;
     h->sr.sqes[index].user_data = e;
 
     h->sr.array[index] = index;
 
-    tail = next_tail;
+    tail++;
 
     if (*h->sr.tail != tail) {
         *h->sr.tail = tail;
         fence();
     }
 
-    if (io_uring_enter(h->fd, 1, 0, IORING_ENTER_GETEVENTS) == -1)
+    __s64 qed = llabs((__s64)*h->sr.head - (__s64)tail);
+
+    if (qed < 32) return 0;
+
+    if (io_uring_enter(h->fd, qed, 0, IORING_ENTER_GETEVENTS) == -1)
         die("io_uring_enter");
 
     return 0;
 }
 
-void hring_deque(struct hring* h,
-                 void (*cb)(struct hring*, hring_addr_t, void*)) {
-    __u32 head = *h->cr.head;
+void hring_deque(struct hring* h, void (*cb)(struct hring*, hring_addr_t)) {
+    register __u32 head = *h->cr.head;
 
     do {
         fence();
@@ -189,7 +195,7 @@ void hring_deque(struct hring* h,
 
         struct io_uring_cqe* cqe = &h->cr.cqes[head & *h->cr.ring_mask];
 
-        cb(h, cqe->user_data, h->sm.map + ((__u64)cqe->user_data * BLOCK_SIZE));
+        cb(h, cqe->user_data);
 
         head++;
 
@@ -311,7 +317,7 @@ void hring_attatch(struct hring* h, char const* const file, __s32 fd) {
 }
 
 void pp_bitmap(struct hring const* const h) {
-    for (size_t i = 0; i < h->sm.blocks >> 5; i++) {
+    for (size_t i = 0; i < (BLOCK_SIZE * hring_bitmap_blocks(h)) >> 5; i++) {
         printf("0x%.8zX:", i);
 
         for (size_t j = 0; j < 32; j++) {

@@ -20,21 +20,15 @@
 size_t target = 1024 * 100000;
 size_t c = 0;
 
-struct msg {
-    __u16 len;
-    __u8 msg[];
-};
-
-void print_msg_cb(struct hring* h, hring_addr_t addr, void* data) {
-    struct msg* payload = data;
-
-    (void)payload;
-
+void print_msg_cb(struct hring* h, hring_addr_t addr) {
     target--;
     c++;
 
-    // printf("#%lu off = %10zu | len = %10d | msg = %s\n", target, off,
-    //        payload->len, payload->msg);
+    // __u8* data = hring_deref(h, addr);
+
+    // printf("%u\n", data[0]);
+
+    // if (c++ == 0) pp_addr(h, addr);
 
     hring_free(h, addr);
 }
@@ -76,7 +70,9 @@ int main(int argc, char** argv) {
 
     struct hring h = { 0 };
 
-    hring_init(&h, 1024);
+    hring_init(&h, 4096);
+
+    printf("bitmap blocks = %u\n", hring_bitmap_blocks(&h));
 
     int pid = fork();
 
@@ -96,35 +92,23 @@ int main(int argc, char** argv) {
 
         if (execv(path, argv) == -1) die("execv");
     } else {
-        const char* msg[] = {
-            "message from parent 0", "message from parent 1",
-            "message from parent 2", "message from parent 3",
-            "message from parent 4", "message from parent 5",
-            "message from parent 6", "message from parent 7",
-            "message from parent 8", "message from parent 9",
-        };
-
-        for (size_t i = 0; i < target; i++) {
+        for (register size_t i = 0; i < target; i++) {
         try_again:;
-            hring_addr_t addr = hring_alloc(&h, 1);
+
+            register hring_addr_t addr = hring_alloc(&h, 1);
 
             if (!addr) goto try_again;
 
-            struct msg* payload = (struct msg*)hring_deref(&h, addr);
+            __u8* msg = hring_deref(&h, addr);
 
-            payload->len = strlen(msg[i % 10]);
-
-            // pp_addr(&h, addr);
-
-            if (!memcpy(payload->msg, msg[i % 10], payload->len)) die("memcpy");
+            // if (!memset(msg, i % 10, BLOCK_SIZE)) die("memset");
 
             hring_queue(&h, addr);
         }
 
-        int status;
-
         printf("wait for child, sent %lu msgs\n", target);
 
+        int status;
         waitpid(pid, &status, 0);
 
         pp_bitmap(&h);

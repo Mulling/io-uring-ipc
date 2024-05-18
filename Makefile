@@ -13,10 +13,10 @@ test: main
 	./main
 
 p: perf
-perf: HRING_FLAGS = -std=gnu2x -flto -O3 -g ${CFLAGS}
+perf: HRING_FLAGS = -std=gnu2x -flto -O3 -g ${CFLAGS} -DNDEBUG
 perf: main
-	perf record -g sh -c ./main
-	perf report
+	perf record -e cache-references,cache-misses,cycles,instructions,branches,faults,migrations ./main
+	perf report -v
 
 compile_commands.json: Makefile
 	bear -- $(MAKE)
