@@ -10,6 +10,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/time.h>
 #include <sys/uio.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -17,16 +18,18 @@
 
 #include "hring.h"
 
-size_t target = 1024 * 100000;
+#define TSIZE 1024 * 100000
+
+size_t target = TSIZE;
 size_t c = 0;
 
 void print_msg_cb(struct hring* h, hring_addr_t addr) {
     target--;
     c++;
 
-    // __u8* data = hring_deref(h, addr);
+    // char* data = hring_deref(h, addr);
 
-    // printf("%u\n", data[0]);
+    // printf("%s\n", data);
 
     // if (c++ == 0) pp_addr(h, addr);
 
@@ -92,6 +95,18 @@ int main(int argc, char** argv) {
 
         if (execv(path, argv) == -1) die("execv");
     } else {
+        struct timeval start = { 0 };
+        struct timeval end = { 0 };
+
+        if (gettimeofday(&start, NULL) == -1) die("gettimeofday");
+
+        char* msgs[] = {
+            "message number 0", "message number 1", "message number 2",
+            "message number 3", "message number 4", "message number 5",
+            "message number 6", "message number 7", "message number 8",
+            "message number 9",
+        };
+
         for (register size_t i = 0; i < target; i++) {
         try_again:;
 
@@ -99,14 +114,28 @@ int main(int argc, char** argv) {
 
             if (!addr) goto try_again;
 
-            __u8* msg = hring_deref(&h, addr);
+            char* msg = hring_deref(&h, addr);
 
             // if (!memset(msg, i % 10, BLOCK_SIZE)) die("memset");
+            //
+            if (!memcpy(msg, msgs[i % 10], strlen(msgs[i % 10]) + 1))
+                die("memcpy");
 
             hring_queue(&h, addr);
         }
 
-        printf("wait for child, sent %lu msgs\n", target);
+        if (gettimeofday(&end, NULL) == -1) die("gettimeofday");
+
+        __u64 diff = (end.tv_sec - start.tv_sec) * 1000000 -
+                     (end.tv_usec - start.tv_usec);
+
+        double msgs_usec = (double)TSIZE / diff;
+
+        printf(
+            "wait for child, sent an average of %.2F msgs/usec, average "
+            "latency "
+            "of %.2F ns\n",
+            msgs_usec, 1000.0 / msgs_usec);
 
         int status;
         waitpid(pid, &status, 0);
