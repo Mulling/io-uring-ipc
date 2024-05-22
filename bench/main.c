@@ -27,7 +27,7 @@ void print_msg_cb(struct hring* h, hring_addr_t addr) {
     target--;
     c++;
 
-    // char* data = hring_deref(h, addr);
+    char* data = hring_deref(h, addr);
 
     // printf("%s\n", data);
 

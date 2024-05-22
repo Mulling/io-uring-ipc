@@ -98,21 +98,21 @@ inline __s32 pidfd_open(__s32 ppid) {
 
 [[gnu::always_inline]]
 static inline bool bitmap_index_used(__u8* bitmap, __u32 i) {
-    return bitmap[i / 8] & (0x01 << (0x07 ^ (i & 0x07)));
+    return bitmap[i / 8] & (0x01 << (i & 0x07));
 }
 
 [[gnu::always_inline]]
 static inline void bitmap_alloc(__u8* bitmap, __u32 i) {
     assert(!bitmap_index_used(bitmap, i));
 
-    __atomic_fetch_or(&bitmap[i / 8], (0x01 << (0x07 ^ (i & 0x07))), 0);
+    __atomic_fetch_or(&bitmap[i / 8], (0x01 << (i & 0x07)), 0);
 }
 
 [[gnu::always_inline]]
 static inline void bitmap_free(__u8* bitmap, __u32 i) {
     assert(bitmap_index_used(bitmap, i));
 
-    __atomic_fetch_and(&bitmap[i / 8], ~(0x01 << (0x07 ^ (i & 0x07))), 0);
+    __atomic_fetch_and(&bitmap[i / 8], ~(0x01 << (i & 0x07)), 0);
 }
 
 [[gnu::always_inline]]
