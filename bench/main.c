@@ -20,6 +20,8 @@
 
 #define TSIZE 1024 * 100000
 
+#define die(s) (printf(__FILE__ ":%d: ", __LINE__), perror(s), exit(1))
+
 size_t target = TSIZE;
 size_t c = 0;
 
@@ -27,11 +29,9 @@ void print_msg_cb(struct hring* h, hring_addr_t addr) {
     target--;
     c++;
 
-    char* data = hring_deref(h, addr);
+    // char* data = hring_deref(h, addr);
 
     // printf("%s\n", data);
-
-    // if (c++ == 0) pp_addr(h, addr);
 
     hring_free(h, addr);
 }
@@ -73,9 +73,7 @@ int main(int argc, char** argv) {
 
     struct hring h = { 0 };
 
-    hring_init(&h, 4096);
-
-    printf("bitmap blocks = %u\n", hring_bitmap_blocks(&h));
+    if (hring_init(&h, 4096) < 0) die("hring_init");
 
     int pid = fork();
 
