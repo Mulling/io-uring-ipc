@@ -40,7 +40,7 @@ hring_addr_t addr = hring_alloc(&h, sizeof(int));
 
 int* val = hring_deref(&h, addr);
 
-val = 123;
+*val = 123;
 
 hring_queue(&h, addr);
 ```
