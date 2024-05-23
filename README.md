@@ -1,6 +1,6 @@
 # io_uring IPC
 
-Using `IORING_OP_NOP` it's possible to send arbitrary data to another process, consequently, it's also possible shared memory-pool entries, meaning, you can send data to another process with very low-latency and high throughput.
+Using `IORING_OP_NOP` it's possible to send arbitrary data to another process, consequently, it's also possible to share memory-pool entries (address), meaning, you can send data to another process with very low-latency and high throughput.
 
 All the synchronization machinery is already provided -- for free -- by io_uring. You only need a shared memory-pool allocator.
 
@@ -31,7 +31,6 @@ void callback(struct hring* h, hring_addr_t addr) {
     hring_free(h, addr)
 }
 
-
 // Consumer:
 struct hring h;
 hring_attatch(&h, "shared_memory_pool_id", uring_fd);
@@ -54,5 +53,3 @@ make test
 
 make bench
 ```
-
-
