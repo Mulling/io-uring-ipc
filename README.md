@@ -4,7 +4,7 @@ Using `IORING_OP_NOP` it's possible to send arbitrary data to another process, c
 
 All the synchronization machinery is already provided -- for free -- by io_uring. You only need a shared memory-pool allocator.
 
-## Using:
+### Using:
 
 One of the limitations of this approach is that the yama security model prevents us from obtaining the file descriptor of the uring, you need either root privileges or PTRACE_MODE_ATTACH_REALCREDS, see `pidfd_getfd(2)`.
 
