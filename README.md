@@ -17,23 +17,30 @@ echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
 ```C
 #include "hring.h"
 
-// Producer:
+// producer:
 struct hring h;
-hring_init("shared_memory_pool_id", &h);
+hring_init(&h, "ipc-name/id", 4096)
 
-hring_deque(&h, callback); // The callback is defined bellow
-
+hring_deque(&h, callback);
+//              ^
+//              |
+//   +----------+
+//   |
+//   v
 void callback(struct hring* h, hring_addr_t addr) {
     int* val = hring_deref(h, addr);
 
-    // Do something with val;
+    // do something with val;
 
     hring_free(h, addr)
 }
 
-// Consumer:
+// consumer:
 struct hring h;
-hring_attatch(&h, "shared_memory_pool_id", uring_fd);
+hring_attatch(&h, "ipc-name/id");
+//                 ^
+//                 |
+//                 +-- will be used to search /dev/shm (must be unique)
 
 hring_addr_t addr = hring_alloc(&h, sizeof(int));
 
@@ -45,6 +52,7 @@ hring_queue(&h, addr);
 ```
 
 ### Building:
+Just include `hring.h`.
 
 ```sh
 make test
