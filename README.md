@@ -1,6 +1,8 @@
 # io_uring IPC
 
-Using `IORING_OP_NOP` it's possible to send arbitrary data to another process, consequently, it's also possible to share memory-pool entries (address), meaning, you can send data to another process with very low-latency and high throughput.
+*Not stable yet, don't use for anything serious.*
+
+Using `IORING_OP_NOP` it's possible to send arbitrary data (up to 64 bits) to another process, consequently, it's also possible to share memory-pool entries (address); meaning, you can send data to another process with very low-latency and high throughput.
 
 All the synchronization machinery is already provided -- for free -- by io_uring. You only need a shared memory-pool allocator.
 
@@ -14,6 +16,7 @@ Another option is to disable it completely.
 echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
 ```
 
+To send a message:
 ```C
 #include "hring.h"
 
@@ -34,8 +37,12 @@ void callback(struct hring* h, hring_addr_t addr) {
 
     hring_free(h, addr)
 }
+```
 
-// consumer:
+To receive a message:
+```C
+#include "hring.h"
+
 struct hring h;
 hring_attatch(&h, "ipc-name/id");
 //                 ^
@@ -48,7 +55,7 @@ int* val = hring_deref(&h, addr);
 
 *val = 123;
 
-hring_queue(&h, addr);
+hring_free(&h, addr);
 ```
 
 ### Building:
