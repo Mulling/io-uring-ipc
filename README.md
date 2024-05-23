@@ -53,3 +53,17 @@ make test
 
 make bench
 ```
+
+### Results
+With a payload size of 8 bytes, sending 102400000 messages.
+
+```
+deque   4053888(3.96%) messages, 0.03 GiB/s
+deque 15033952(14.68%) messages, 0.11 GiB/s
+deque 15065728(14.71%) messages, 0.11 GiB/s
+deque 15074784(14.72%) messages, 0.11 GiB/s
+deque 15058624(14.71%) messages, 0.11 GiB/s
+deque 15058432(14.71%) messages, 0.11 GiB/s
+deque 15073024(14.72%) messages, 0.11 GiB/s
+wait for child, sent an average of 14.23 msgs/usec, average latency of 70.28 ns per msg
+```

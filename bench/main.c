@@ -29,9 +29,9 @@ void print_msg_cb(struct hring* h, hring_addr_t addr) {
     target--;
     c++;
 
-    // char* data = hring_deref(h, addr);
+    // size_t* val = hring_deref(h, addr);
 
-    // printf("%s\n", data);
+    // printf("%lu\n", *val);
 
     hring_free(h, addr);
 }
@@ -50,7 +50,7 @@ int main(int argc, char** argv) {
 
         struct hring h;
 
-        hring_attatch(&h, "uring_shm", wq_fd);
+        hring_attatch(&h, "uring_shm");
 
         size_t total = target;
 
@@ -58,9 +58,9 @@ int main(int argc, char** argv) {
 
         while (target) {
             if (time(NULL) - last >= 1) {
-                printf("deque %lu(%2.2F%%) messages, %1.2F Gib/s\n", c,
+                printf("deque %lu(%2.2F%%) messages, %1.2F GiB/s\n", c,
                        c / (double)total * 100,
-                       (double)(c * BLOCK_SIZE) / (1024 * 1024 * 1024));
+                       (double)(c * sizeof(size_t)) / (1024 * 1024 * 1024));
                 last = time(NULL);
                 c = 0;
             }
@@ -73,7 +73,7 @@ int main(int argc, char** argv) {
 
     struct hring h = { 0 };
 
-    if (hring_init(&h, 4096) < 0) die("hring_init");
+    if (hring_init(&h, "uring_shm", 4096) < 0) die("hring_init");
 
     int pid = fork();
 
@@ -112,12 +112,9 @@ int main(int argc, char** argv) {
 
             if (!addr) goto try_again;
 
-            char* msg = hring_deref(&h, addr);
+            size_t* msg = hring_deref(&h, addr);
 
-            // if (!memset(msg, i % 10, BLOCK_SIZE)) die("memset");
-            //
-            if (!memcpy(msg, msgs[i % 10], strlen(msgs[i % 10]) + 1))
-                die("memcpy");
+            *msg = i;
 
             hring_queue(&h, addr);
         }
@@ -139,7 +136,7 @@ int main(int argc, char** argv) {
         waitpid(pid, &status, 0);
 
         pp_bitmap(&h);
-        shm_unlink("uring_shm");
+        shm_unlink(h.id);
 
         printf("child exited with status = %d\n", status);
     }

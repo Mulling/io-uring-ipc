@@ -1,6 +1,7 @@
 #pragma once
 
 #include <assert.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <linux/fs.h>
 #include <linux/io_uring.h>
@@ -13,12 +14,15 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/types.h>
 #include <sys/uio.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 #define HRING_SQ 1
 #define HRING_CQ 0
+
+#define HRING_IDMAX 256
 
 #define fence() __asm__ __volatile__("" ::: "memory")
 
@@ -61,6 +65,8 @@ struct hring {
         struct sring sr;
         struct cring cr;
     };
+
+    char id[HRING_IDMAX];
 };
 
 [[gnu::always_inline]]
@@ -257,10 +263,51 @@ static int mmap_cq(struct hring* h, struct io_uring_params* params, __s32 fd) {
     return 0;
 }
 
-static int smm_init(size_t blocks, struct smm* sm) {
+struct hring_smm_parts {
+    int uring_fd;
+    pid_t pid;
+    char name[32];
+};
+
+static int hring_parts_from_id(struct hring_smm_parts* parts,
+                               char const* const id) {
+    // Trust thy all might parser
+    sscanf(id, "%[^:]:%d:%d", parts->name, &parts->uring_fd, &parts->pid);
+
+    return 0;
+}
+
+static int hring_make_id(struct hring_smm_parts const* const parts, char* dst,
+                         size_t size) {
+    return snprintf(dst, size, "%s:%d:%d", parts->name, parts->uring_fd,
+                    parts->pid);
+}
+
+int hring_get_id_parts_mathing_name(struct hring_smm_parts* parts,
+                                    char const* const name) {
+    struct dirent* dent;
+
+    DIR* dir = opendir("/dev/shm");
+
+    if (dir == NULL) return -1;
+
+    while ((dent = readdir(dir)) != NULL) {
+        if (strstr(dent->d_name, name) != NULL) {
+            hring_parts_from_id(parts, dent->d_name);
+            goto end;
+        }
+    }
+
+end:
+    closedir(dir);
+
+    return 0;
+}
+
+static int smm_init(struct smm* sm, char const* const id, size_t blocks) {
     sm->blocks = blocks;
 
-    __s32 memfd = shm_open("uring_shm", O_CREAT | O_TRUNC | O_RDWR, S_IRWXU);
+    __s32 memfd = shm_open(id, O_CREAT | O_TRUNC | O_RDWR, S_IRWXU);
 
     if (memfd == -1) return -1;
 
@@ -298,7 +345,7 @@ static int smm_from_file(char const* const file, struct smm* sm) {
     return 0;
 }
 
-int hring_init(struct hring* h, size_t blocks) {
+int hring_init(struct hring* h, char const* const name, size_t blocks) {
     struct io_uring_params params = { .flags = IORING_SETUP_SINGLE_ISSUER };
 
     int ret = h->fd = io_uring_setup(blocks, &params);
@@ -308,18 +355,42 @@ int hring_init(struct hring* h, size_t blocks) {
     h->fd = ret;
     h->kind = HRING_SQ;
 
-    smm_init(blocks, &h->sm);
+    struct hring_smm_parts parts = {
+        .pid = getpid(),
+        .uring_fd = h->fd,
+    };
+
+    memcpy(parts.name, name, strlen(name) + 1);
+
+    hring_make_id(&parts, h->id, HRING_IDMAX);
+
+    smm_init(&h->sm, h->id, blocks);
     mmap_sq(h, &params);
+
+    return 0;
 }
 
-int hring_attatch(struct hring* h, char const* const file, __s32 fd) {
+int hring_attatch(struct hring* h, char const* const name) {
     struct io_uring_params params = { 0 };
+
+    struct hring_smm_parts parts = { 0 };
+    hring_get_id_parts_mathing_name(&parts, name);
+
+    hring_make_id(&parts, h->id, HRING_IDMAX);
+
+    __s32 pidfd = pidfd_open(parts.pid);
+
+    if (pidfd == -1) return -1;
+
+    __s32 wq_fd = pidfd_getfd(pidfd, parts.uring_fd);
+
+    if (wq_fd == -1) return -1;
 
     h->kind = HRING_CQ;
 
-    if (smm_from_file(file, &h->sm) == -1) return 1;
+    if (smm_from_file(h->id, &h->sm) == -1) return 1;
 
-    return mmap_cq(h, &params, fd);
+    return mmap_cq(h, &params, wq_fd);
 }
 
 void pp_bitmap(struct hring const* const h) {
