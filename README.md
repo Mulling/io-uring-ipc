@@ -20,42 +20,46 @@ To send a message:
 ```C
 #include "hring.h"
 
-// producer:
 struct hring h;
 hring_init(&h, "ipc-name/id", 4096)
+/*              ^
+                |
+                +-- will be used to search /dev/shm (must be unique) */
 
-hring_deque(&h, callback);
-//              ^
-//              |
-//   +----------+
-//   |
-//   v
-void callback(struct hring* h, hring_addr_t addr) {
-    int* val = hring_deref(h, addr);
+hring_addr_t addr = hring_alloc(&h, sizeof(int));
 
-    // do something with val;
+size_t* msg = hring_deref(&h, addr);
 
-    hring_free(h, addr)
-}
+*msg = 123;
+
+hring_try_que(&h, addr);
+
+hring_submit(&h, true);
 ```
 
 To receive a message:
 ```C
 #include "hring.h"
 
+// consumer:
 struct hring h;
 hring_attatch(&h, "ipc-name/id");
-//                 ^
-//                 |
-//                 +-- will be used to search /dev/shm (must be unique)
 
-hring_addr_t addr = hring_alloc(&h, sizeof(int));
+hring_deque(&h, callback);
+/*              ^
+                |
+                |
+                |
+                v
+*/         void callback(struct hring* h, struct io_uring_cqe const* const cqe) {
+               hring_addr_t addr = cqe->user_data;
 
-int* val = hring_deref(&h, addr);
+               int* val = hring_deref(h, addr);
 
-*val = 123;
+               // do something with val;
 
-hring_free(&h, addr);
+               hring_free(h, addr);
+           }
 ```
 
 ### Building:
@@ -73,12 +77,10 @@ make bench
 With a payload size of 8 bytes, sending 102400000 messages.
 
 ```
-deque   4053888(3.96%) messages, 0.03 GiB/s
-deque 15033952(14.68%) messages, 0.11 GiB/s
-deque 15065728(14.71%) messages, 0.11 GiB/s
-deque 15074784(14.72%) messages, 0.11 GiB/s
-deque 15058624(14.71%) messages, 0.11 GiB/s
-deque 15058432(14.71%) messages, 0.11 GiB/s
-deque 15073024(14.72%) messages, 0.11 GiB/s
-wait for child, sent an average of 14.23 msgs/usec, average latency of 70.28 ns per msg
+left = 94497280, deque   7902720(7.72%) messages, 0.06 GiB/s
+left = 68429792, deque 26067488(25.46%) messages, 0.19 GiB/s
+left = 42355424, deque 26074368(25.46%) messages, 0.19 GiB/s
+left = 16253600, deque 26101824(25.49%) messages, 0.19 GiB/s
+wait for child, sent an average of 25.15 msgs/usec, average latency of 39.76 ns
+child exited with status = 0
 ```
