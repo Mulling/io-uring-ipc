@@ -25,15 +25,13 @@
 size_t target = TSIZE;
 size_t c = 0;
 
-void print_msg_cb(struct hring* h, hring_addr_t addr) {
+void print_msg_cb(struct hring* h, struct io_uring_cqe const* const cqe) {
     target--;
     c++;
 
-    // size_t* val = hring_deref(h, addr);
+    // printf("%X %s\n", cqe->flags, msg);
 
-    // printf("%lu\n", *val);
-
-    hring_free(h, addr);
+    hring_free(h, cqe->user_data);
 }
 
 int main(int argc, char** argv) {
@@ -58,8 +56,8 @@ int main(int argc, char** argv) {
 
         while (target) {
             if (time(NULL) - last >= 1) {
-                printf("deque %lu(%2.2F%%) messages, %1.2F GiB/s\n", c,
-                       c / (double)total * 100,
+                printf("left = %lu, deque %lu(%2.2F%%) messages, %1.2F GiB/s\n",
+                       target, c, c / (double)total * 100,
                        (double)(c * sizeof(size_t)) / (1024 * 1024 * 1024));
                 last = time(NULL);
                 c = 0;
@@ -98,26 +96,26 @@ int main(int argc, char** argv) {
 
         if (gettimeofday(&start, NULL) == -1) die("gettimeofday");
 
-        char* msgs[] = {
-            "message number 0", "message number 1", "message number 2",
-            "message number 3", "message number 4", "message number 5",
-            "message number 6", "message number 7", "message number 8",
-            "message number 9",
-        };
+        for (size_t i = 0, qed = 0; i < target; i++) {
+            hring_addr_t addr;
 
-        for (register size_t i = 0; i < target; i++) {
-        try_again:;
-
-            register hring_addr_t addr = hring_alloc(&h, 1);
-
-            if (!addr) goto try_again;
+            do {
+                addr = hring_alloc(&h, 1);
+            } while (!addr);
 
             size_t* msg = hring_deref(&h, addr);
 
             *msg = i;
 
-            hring_queue(&h, addr);
+            qed = hring_try_que(&h, addr);
+
+            if (!qed) printf("fail to que\n");
+
+            hring_submit(&h, qed == 32);
         }
+
+        // send any remaining
+        hring_submit(&h, true);
 
         if (gettimeofday(&end, NULL) == -1) die("gettimeofday");
 
@@ -135,7 +133,7 @@ int main(int argc, char** argv) {
         int status;
         waitpid(pid, &status, 0);
 
-        pp_bitmap(&h);
+        // pp_bitmap(&h);
         shm_unlink(h.id);
 
         printf("child exited with status = %d\n", status);
