@@ -43,7 +43,7 @@ To receive a message:
 
 // consumer:
 struct hring h;
-hring_attatch(&h, "ipc-name/id");
+hring_attach(&h, "ipc-name/id");
 
 hring_deque(&h, callback);
 /*              ^

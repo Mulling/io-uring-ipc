@@ -20,8 +20,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#define HRING_IDMAX 256
-
 #define __hring_read_once(var) \
     atomic_load_explicit((_Atomic typeof(var)*)&(var), memory_order_relaxed)
 
@@ -109,20 +107,20 @@ inline __s32 pidfd_open(__s32 ppid) {
 }
 
 [[gnu::always_inline]]
-static inline bool bitmap_index_used(__u8* bitmap, __u32 i) {
+inline bool __bitmap_index_used(__u8* bitmap, __u32 i) {
     return bitmap[i / 8] & (0x01 << (i & 0x07));
 }
 
 [[gnu::always_inline]]
-static inline void bitmap_alloc(__u8* bitmap, __u32 i) {
-    assert(!bitmap_index_used(bitmap, i));
+static inline void __bitmap_alloc(__u8* bitmap, __u32 i) {
+    assert(!__bitmap_index_used(bitmap, i));
 
     __atomic_fetch_or(&bitmap[i / 8], (0x01 << (i & 0x07)), 0);
 }
 
 [[gnu::always_inline]]
-static inline void bitmap_free(__u8* bitmap, __u32 i) {
-    assert(bitmap_index_used(bitmap, i));
+inline void __bitmap_free(__u8* bitmap, __u32 i) {
+    assert(__bitmap_index_used(bitmap, i));
 
     __atomic_fetch_and(&bitmap[i / 8], ~(0x01 << (i & 0x07)), 0);
 }
@@ -133,16 +131,16 @@ static inline __u32 blocks(size_t size) {
 }
 
 [[gnu::always_inline]]
-static inline __u32 hring_bitmap_blocks(struct hring const* const h) {
+static inline __u32 __hring_bitmap_blocks(struct hring const* const h) {
     return h->pool.blocks / 8192 + (h->pool.blocks % 8192 != 0);
 }
 
-hring_addr_t hring_alloc(struct hring* h, size_t size) {
+hring_addr_t hring_mpool_alloc(struct hring* h, size_t size) {
     if (size > BLOCK_SIZE) return 0;
 
     for (size_t i = 0; i < h->pool.blocks; i++) {
-        if (!bitmap_index_used(h->pool.bitmap, i)) {
-            bitmap_alloc(h->pool.bitmap, i);
+        if (!__bitmap_index_used(h->pool.bitmap, i)) {
+            __bitmap_alloc(h->pool.bitmap, i);
 
             return size << 32 | i;
         }
@@ -151,8 +149,9 @@ hring_addr_t hring_alloc(struct hring* h, size_t size) {
     return 0;
 }
 
-void hring_free(struct hring* h, hring_addr_t addr) {
-    bitmap_free(h->pool.bitmap, hring_addr_off(addr));
+[[gnu::always_inline]]
+inline void hring_mpool_free(struct hring* h, hring_addr_t addr) {
+    __bitmap_free(h->pool.bitmap, hring_addr_off(addr));
 }
 
 [[gnu::always_inline]]
@@ -248,7 +247,7 @@ void hring_deque(struct hring* h,
     if (nr) __hring_smp_store_release(cr->khead, *cr->khead + nr);
 }
 
-static int mmap_sq(struct hring* h, struct io_uring_params* p) {
+static int __hring_map_sring(struct hring* h, struct io_uring_params* p) {
     struct sring* sr = &h->sr;
 
     __s32 ret = 0;
@@ -284,7 +283,8 @@ ret:
     return ret;
 }
 
-static int mmap_cq(struct hring* h, struct io_uring_params* params, __s32 fd) {
+static int __hring_map_cring(struct hring* h, struct io_uring_params* params,
+                             __s32 fd) {
     if (fd != 0) {
         params->flags |= IORING_SETUP_ATTACH_WQ;
         params->wq_fd = fd;
@@ -314,22 +314,20 @@ static int mmap_cq(struct hring* h, struct io_uring_params* params, __s32 fd) {
     return 0;
 }
 
-struct hring_mpool_parts {
+struct __hring_mpool_parts {
     int fd;
     pid_t pid;
     char* name;
 };
 
-inline static void __hring_mpool_parts_from_id(struct hring_mpool_parts* parts,
-                                               char const* const id) {
-    parts->name = malloc(strlen(id));
-
-    // trust thy all might parser
-    sscanf(id, "%[^:]:%d:%d", parts->name, &parts->fd, &parts->pid);
+inline static void __hring_mpool_parts_from_id(
+    struct __hring_mpool_parts* parts, char const* const id) {
+    sscanf(id, "%*[^:]:%d:%d", &parts->fd,
+           &parts->pid);  // trust thy all might parser
 }
 
 static inline char* __hring_id_from_mpool_parts(
-    struct hring_mpool_parts const* const parts) {
+    struct __hring_mpool_parts const* const parts) {
     int size =
         snprintf(NULL, 0, "%s:%d:%d", parts->name, parts->fd, parts->pid) + 1;
 
@@ -345,8 +343,10 @@ static inline char* __hring_id_from_mpool_parts(
     return id;
 }
 
-int hring_get_id_parts_mathing_name(struct hring_mpool_parts* parts,
-                                    char const* const name) {
+static inline int __hring_get_mpool_parts_from_name(
+    struct __hring_mpool_parts* parts) {
+    assert(parts->name != NULL);
+
     struct dirent* dent;
 
     DIR* dir = opendir("/dev/shm");
@@ -354,7 +354,7 @@ int hring_get_id_parts_mathing_name(struct hring_mpool_parts* parts,
     if (dir == NULL) return -1;
 
     while ((dent = readdir(dir)) != NULL) {
-        if (strstr(dent->d_name, name) != NULL) {
+        if (strstr(dent->d_name, parts->name) != NULL) {
             __hring_mpool_parts_from_id(parts, dent->d_name);
             goto end;
         }
@@ -399,8 +399,10 @@ cleanup:
     return ret;
 }
 
-static int smm_from_file(char const* const file, struct hring_mpool* pool) {
-    __s32 memfd = shm_open(file, O_RDWR, 0);
+static int __hring_mpool_attach(struct hring* h) {
+    struct hring_mpool* pool = &h->pool;
+
+    __s32 memfd = shm_open(h->id, O_RDWR, 0);
 
     if (memfd == -1) return -1;
 
@@ -422,7 +424,7 @@ static int smm_from_file(char const* const file, struct hring_mpool* pool) {
 
 [[gnu::always_inline]]
 static inline int __hring_setup(struct hring* h, struct io_uring_params* params,
-                                struct hring_mpool_parts* parts,
+                                struct __hring_mpool_parts* parts,
                                 size_t const blocks) {
     int ret = h->fd = __io_uring_setup(blocks, params);
 
@@ -440,7 +442,7 @@ static inline int __hring_setup(struct hring* h, struct io_uring_params* params,
 int hring_init(struct hring* h, char* name, size_t blocks) {
     struct io_uring_params params = { .flags = IORING_SETUP_SINGLE_ISSUER |
                                                IORING_SETUP_NO_SQARRAY };
-    struct hring_mpool_parts parts = {
+    struct __hring_mpool_parts parts = {
         .name = name,
     };
 
@@ -450,21 +452,41 @@ int hring_init(struct hring* h, char* name, size_t blocks) {
 
     if ((ret = __hring_mpool_init(h, blocks)) < 0) goto end;
 
-    ret = mmap_sq(h, &params);
+    ret = __hring_map_sring(h, &params);
 
 end:
     return ret;
 }
 
-int hring_attatch(struct hring* h, char const* const name) {
+[[gnu::always_inline]]
+static inline char* __hring_attach_get_id(struct __hring_mpool_parts* parts) {
+    __hring_get_mpool_parts_from_name(parts);  // FIXME: can fail
+
+    return __hring_id_from_mpool_parts(parts);
+}
+
+static inline int __hring_attach_setup(struct hring* h,
+                                       struct io_uring_params* p, int wq_fd) {
+    p->flags |= IORING_SETUP_ATTACH_WQ;
+    p->wq_fd = wq_fd;
+
+    int ret = __io_uring_setup(h->pool.blocks, p);
+
+    if (ret < -1) return ret;
+
+    h->fd = ret;
+    h->features = p->features;
+
+    return ret;
+}
+
+int hring_attach(struct hring* h, char* name) {
     struct io_uring_params params = { 0 };
-    struct hring_mpool_parts parts = { 0 };
+    struct __hring_mpool_parts parts = { .name = name };
 
     __s32 ret;
 
-    hring_get_id_parts_mathing_name(&parts, name);
-
-    h->id = __hring_id_from_mpool_parts(&parts);
+    h->id = __hring_attach_get_id(&parts);
 
     __s32 pid_fd = ret = pidfd_open(parts.pid);
     if (ret == -1) return ret;
@@ -472,9 +494,9 @@ int hring_attatch(struct hring* h, char const* const name) {
     __s32 wq_fd = ret = pidfd_getfd(pid_fd, parts.fd);
     if (ret == -1) goto pid_fd;
 
-    if ((ret = smm_from_file(h->id, &h->pool)) < 0) goto wq_fd;
+    if ((ret = __hring_mpool_attach(h)) < 0) goto wq_fd;
 
-    if ((ret = mmap_cq(h, &params, wq_fd)) < 0) goto wq_fd;
+    if ((ret = __hring_map_cring(h, &params, wq_fd)) < 0) goto wq_fd;
 
     goto pid_fd;
 
@@ -489,7 +511,7 @@ pid_fd:
 }
 
 void __pp_bitmap(struct hring const* const h) {
-    for (size_t i = 0; i < (BLOCK_SIZE * hring_bitmap_blocks(h)) >> 5; i++) {
+    for (size_t i = 0; i < (BLOCK_SIZE * __hring_bitmap_blocks(h)) >> 5; i++) {
         printf("0x%.8zX:", i);
 
         for (size_t j = 0; j < 32; j++) {

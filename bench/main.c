@@ -31,13 +31,13 @@ void callback(struct hring* h, struct io_uring_cqe const* const cqe) {
 
     // printf("%X %s\n", cqe->flags, msg);
 
-    hring_free(h, cqe->user_data);
+    hring_mpool_free(h, cqe->user_data);
 }
 
 int child_main() {
     struct hring h;
 
-    hring_attatch(&h, "uring_shm");
+    hring_attach(&h, "uring_shm");
 
     size_t total = target;
 
@@ -79,7 +79,7 @@ int main([[maybe_unused]] int argc, char** argv) {
                 hring_addr_t addr;
 
                 do {
-                    addr = hring_alloc(&h, 1);
+                    addr = hring_mpool_alloc(&h, 1);
                 } while (!addr);
 
                 size_t* msg = hring_deref(&h, addr);
