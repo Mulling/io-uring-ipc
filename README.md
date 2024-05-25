@@ -70,7 +70,7 @@ make test
 
 # or
 
-make bench
+make perf
 ```
 
 ### Results

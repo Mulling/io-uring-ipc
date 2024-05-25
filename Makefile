@@ -16,7 +16,7 @@ p: perf
 perf: HRING_FLAGS = -std=gnu2x -flto -O3 -g ${CFLAGS} -DNDEBUG
 perf: main
 	$(QUIET_PERF) perf record -e cache-references,cache-misses,cycles,instructions,branches,faults,migrations ./main
-	$(QUIET_PERF) perf report -v
+	perf report -v
 
 compile_commands.json: Makefile
 	$(QUIET_BEAR) bear -- $(MAKE)
