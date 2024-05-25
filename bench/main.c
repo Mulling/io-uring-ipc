@@ -97,7 +97,6 @@ int main([[maybe_unused]] int argc, char** argv) {
             hring_submit(&h, true);
 
             if (gettimeofday(&end, NULL) == -1) die("gettimeofday");
-
             __u64 diff = (end.tv_sec - start.tv_sec) * 1000000 -
                          (end.tv_usec - start.tv_usec);
 
