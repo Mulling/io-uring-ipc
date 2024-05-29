@@ -98,30 +98,30 @@ inline __s32 __io_uring_enter(int fd, unsigned int to_submit,
 }
 
 [[gnu::always_inline]]
-inline __s32 pidfd_getfd(__s32 pidfd, __s32 fd) {
+inline __s32 __pidfd_getfd(__s32 pidfd, __s32 fd) {
     return (__s32)syscall(SYS_pidfd_getfd, pidfd, fd, 0);
 }
 
 [[gnu::always_inline]]
-inline __s32 pidfd_open(__s32 ppid) {
+inline __s32 __pidfd_open(__s32 ppid) {
     return (__s32)syscall(SYS_pidfd_open, ppid, 0);
 }
 
 [[gnu::always_inline]]
-inline bool __bitmap_index_used(__u8* bitmap, __u32 i) {
+inline bool _bitmap_index_used(__u8* bitmap, __u32 i) {
     return bitmap[i / 8] & (0x01 << (i & 0x07));
 }
 
 [[gnu::always_inline]]
-static inline void __bitmap_alloc(__u8* bitmap, __u32 i) {
-    assert(!__bitmap_index_used(bitmap, i));
+static inline void _bitmap_alloc(__u8* bitmap, __u32 i) {
+    assert(!_bitmap_index_used(bitmap, i));
 
     __atomic_fetch_or(&bitmap[i / 8], (0x01 << (i & 0x07)), 0);
 }
 
 [[gnu::always_inline]]
-inline void __bitmap_free(__u8* bitmap, __u32 i) {
-    assert(__bitmap_index_used(bitmap, i));
+inline void _bitmap_free(__u8* bitmap, __u32 i) {
+    assert(_bitmap_index_used(bitmap, i));
 
     __atomic_fetch_and(&bitmap[i / 8], ~(0x01 << (i & 0x07)), 0);
 }
@@ -141,8 +141,8 @@ hring_addr_t hring_mpool_alloc(struct hring* h, size_t size) {
         return 0;
 
     for (size_t i = 0; i < h->pool.blocks; i++) {
-        if (!__bitmap_index_used(h->pool.bitmap, i)) {
-            __bitmap_alloc(h->pool.bitmap, i);
+        if (!_bitmap_index_used(h->pool.bitmap, i)) {
+            _bitmap_alloc(h->pool.bitmap, i);
 
             return size << 32 | i;
         }
@@ -153,7 +153,7 @@ hring_addr_t hring_mpool_alloc(struct hring* h, size_t size) {
 
 [[gnu::always_inline]]
 inline void hring_mpool_free(struct hring* h, hring_addr_t addr) {
-    __bitmap_free(h->pool.bitmap, hring_addr_off(addr));
+    _bitmap_free(h->pool.bitmap, hring_addr_off(addr));
 }
 
 [[gnu::always_inline]]
@@ -162,7 +162,7 @@ static inline void* hring_deref(struct hring const* h, hring_addr_t addr) {
 }
 
 [[gnu::always_inline]]
-static inline void __hring_fill_sqe(struct io_uring_sqe* sqe,
+static inline void _hring_fill_sqe(struct io_uring_sqe* sqe,
                                     hring_addr_t addr) {
     sqe->flags = 0;
     sqe->ioprio = 0;
@@ -196,14 +196,14 @@ int hring_try_que(struct hring* h, hring_addr_t addr) {
 
     struct io_uring_sqe* sqe = &sr->sqes[sr->tail & sr->ring_mask];
 
-    __hring_fill_sqe(sqe, addr);
+    _hring_fill_sqe(sqe, addr);
 
     sr->tail = next;
 
     return qed;
 }
 
-static __u32 __hring_flush_sr(struct hring* h) {
+static __u32 _hring_flush_sr(struct hring* h) {
     struct sring* sr = &h->sr;
 
     unsigned tail = sr->tail;
@@ -221,7 +221,7 @@ int hring_submit(struct hring* h, bool force) {
                               (IORING_SQ_CQ_OVERFLOW | IORING_SQ_TASKRUN);
 
     if (enter)
-        return __io_uring_enter(h->fd, __hring_flush_sr(h), 0,
+        return __io_uring_enter(h->fd, _hring_flush_sr(h), 0,
                                 IORING_ENTER_GETEVENTS);
     else
         return 0;
@@ -252,12 +252,17 @@ void hring_deque(struct hring* h,
         _hring_smp_store_release(cr->khead, *cr->khead + nr);
 }
 
-static int __hring_map_sring(struct hring* h, struct io_uring_params* p) {
+static int _hring_map_sring(struct hring* h, struct io_uring_params* p) {
     struct sring* sr = &h->sr;
 
-    size_t rsize = p->sq_off.array + p->sq_entries * sizeof(__u32);
+    size_t crsize =
+        p->cq_off.cqes + p->cq_entries * sizeof(struct io_uring_cqe);
+    size_t srsize = p->sq_off.array + p->sq_entries * sizeof(__u32);
 
-    void* sq_ptr = mmap(0, rsize, PROT_READ | PROT_WRITE,
+    if (p->features & IORING_FEAT_SINGLE_MMAP && crsize > srsize)
+        srsize = crsize;
+
+    void* sq_ptr = mmap(0, srsize, PROT_READ | PROT_WRITE,
                         MAP_SHARED | MAP_POPULATE, h->fd, IORING_OFF_SQ_RING);
 
     if (sq_ptr == MAP_FAILED)
@@ -272,7 +277,7 @@ static int __hring_map_sring(struct hring* h, struct io_uring_params* p) {
     if ((sr->sqes = mmap(0, p->sq_entries * sizeof(struct io_uring_sqe),
                          PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE,
                          h->fd, IORING_OFF_SQES)) == MAP_FAILED) {
-        munmap(sq_ptr, rsize);
+        munmap(sq_ptr, srsize);
         return -1;
     };
 
@@ -299,20 +304,20 @@ static int _hring_map_cring(struct hring* h, struct io_uring_params* params,
     return 0;
 }
 
-struct __hring_mpool_parts {
+struct _hring_mpool_parts {
     int fd;
     pid_t pid;
     char* name;
 };
 
-inline static void __hring_mpool_parts_from_id(
-    struct __hring_mpool_parts* parts, char const* const id) {
+inline static void _hring_mpool_parts_from_id(
+    struct _hring_mpool_parts* parts, char const* const id) {
     sscanf(id, "%*[^:]:%d:%d", &parts->fd,
            &parts->pid);  // trust thy all might parser
 }
 
 static inline char* _hring_id_from_mpool_parts(
-    struct __hring_mpool_parts const* const parts) {
+    struct _hring_mpool_parts const* const parts) {
     int size =
         snprintf(NULL, 0, "%s:%d:%d", parts->name, parts->fd, parts->pid) + 1;
 
@@ -329,7 +334,7 @@ static inline char* _hring_id_from_mpool_parts(
 }
 
 static inline int _hring_get_mpool_parts_from_name(
-    struct __hring_mpool_parts* parts) {
+    struct _hring_mpool_parts* parts) {
     assert(parts->name != NULL);
 
     struct dirent* dent;
@@ -341,7 +346,7 @@ static inline int _hring_get_mpool_parts_from_name(
 
     while ((dent = readdir(dir)) != NULL) {
         if (strstr(dent->d_name, parts->name) != NULL) {
-            __hring_mpool_parts_from_id(parts, dent->d_name);
+            _hring_mpool_parts_from_id(parts, dent->d_name);
             goto end;
         }
     }
@@ -402,7 +407,7 @@ static int _hring_mpool_attach(struct hring* h) {
 
 [[gnu::always_inline]]
 static inline int _hring_setup(struct hring* h, struct io_uring_params* params,
-                               struct __hring_mpool_parts* parts,
+                               struct _hring_mpool_parts* parts,
                                size_t const blocks) {
     assert(parts->name != NULL);
 
@@ -421,7 +426,7 @@ static inline int _hring_setup(struct hring* h, struct io_uring_params* params,
 int hring_init(struct hring* h, char* name, size_t blocks) {
     struct io_uring_params params = { .flags = IORING_SETUP_SINGLE_ISSUER |
                                                IORING_SETUP_NO_SQARRAY };
-    struct __hring_mpool_parts parts = {
+    struct _hring_mpool_parts parts = {
         .name = name,
     };
 
@@ -432,14 +437,14 @@ int hring_init(struct hring* h, char* name, size_t blocks) {
     if ((ret = _hring_mpool_init(h, blocks)) == -1)
         goto end;
 
-    ret = __hring_map_sring(h, &params);
+    ret = _hring_map_sring(h, &params);
 
 end:
     return ret;
 }
 
 static inline char* _hring_parts_and_id_from_name(
-    struct __hring_mpool_parts* parts) {
+    struct _hring_mpool_parts* parts) {
     if (_hring_get_mpool_parts_from_name(parts) == -1)
         return NULL;  // FIXME: can fail
 
@@ -449,10 +454,10 @@ static inline char* _hring_parts_and_id_from_name(
 static inline int _hring_pidfd_get_wq_fd(pid_t pid, __s32 fd) {
     __s32 pid_fd, wq_fd;
 
-    if ((pid_fd = pidfd_open(pid)) == -1)
+    if ((pid_fd = __pidfd_open(pid)) == -1)
         return -1;
 
-    wq_fd = pidfd_getfd(pid_fd, fd);
+    wq_fd = __pidfd_getfd(pid_fd, fd);
 
     close(pid_fd);
 
@@ -477,7 +482,7 @@ static inline int _hring_attach_setup(struct hring* h,
 
 int hring_attach(struct hring* h, char* name) {
     struct io_uring_params params = { 0 };
-    struct __hring_mpool_parts parts = { .name = name };
+    struct _hring_mpool_parts parts = { .name = name };
 
     __s32 ret;
 
@@ -504,7 +509,7 @@ int hring_attach(struct hring* h, char* name) {
     return ret;
 }
 
-void __pp_bitmap(struct hring const* const h) {
+void _pp_bitmap(struct hring const* const h) {
     for (size_t i = 0; i < (BLOCK_SIZE * __hring_bitmap_blocks(h)) >> 5; i++) {
         printf("0x%.8zX:", i);
 
@@ -515,7 +520,7 @@ void __pp_bitmap(struct hring const* const h) {
     }
 }
 
-void __pp_addr(struct hring const* const h, hring_addr_t addr) {
+void _pp_addr(struct hring const* const h, hring_addr_t addr) {
     __u32 off = hring_addr_off(addr);
 
     __u8* data = hring_deref(h, addr);
