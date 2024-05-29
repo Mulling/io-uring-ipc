@@ -79,7 +79,8 @@ struct hring {
 static inline ssize_t file_size(int fd) {
     struct stat s;
 
-    if (fstat(fd, &s) < 0) return -1;
+    if (fstat(fd, &s) < 0)
+        return -1;
 
     return s.st_size;
 }
@@ -136,7 +137,8 @@ static inline __u32 __hring_bitmap_blocks(struct hring const* const h) {
 }
 
 hring_addr_t hring_mpool_alloc(struct hring* h, size_t size) {
-    if (size > BLOCK_SIZE) return 0;
+    if (size > BLOCK_SIZE)
+        return 0;
 
     for (size_t i = 0; i < h->pool.blocks; i++) {
         if (!__bitmap_index_used(h->pool.bitmap, i)) {
@@ -189,7 +191,8 @@ int hring_try_que(struct hring* h, hring_addr_t addr) {
 
     __u32 qed = next - head;
 
-    if (qed > sr->ring_entries) return 0;
+    if (qed > sr->ring_entries)
+        return 0;
 
     struct io_uring_sqe* sqe = &sr->sqes[sr->tail & sr->ring_mask];
 
@@ -233,7 +236,8 @@ void hring_deque(struct hring* h,
     __u32 nr = 0;
 
     do {
-        if (head == tail) break;
+        if (head == tail)
+            break;
 
         struct io_uring_cqe* cqe = &h->cr.cqes[head & h->cr.ring_mask];
 
@@ -244,7 +248,8 @@ void hring_deque(struct hring* h,
 
     } while (true);
 
-    if (nr) _hring_smp_store_release(cr->khead, *cr->khead + nr);
+    if (nr)
+        _hring_smp_store_release(cr->khead, *cr->khead + nr);
 }
 
 static int __hring_map_sring(struct hring* h, struct io_uring_params* p) {
@@ -255,7 +260,8 @@ static int __hring_map_sring(struct hring* h, struct io_uring_params* p) {
     void* sq_ptr = mmap(0, rsize, PROT_READ | PROT_WRITE,
                         MAP_SHARED | MAP_POPULATE, h->fd, IORING_OFF_SQ_RING);
 
-    if (sq_ptr == MAP_FAILED) return -1;
+    if (sq_ptr == MAP_FAILED)
+        return -1;
 
     sr->khead = sq_ptr + p->sq_off.head;
     sr->ktail = sq_ptr + p->sq_off.tail;
@@ -281,7 +287,8 @@ static int _hring_map_cring(struct hring* h, struct io_uring_params* params,
     void* cq_ptr = mmap(0, ring_size, PROT_READ | PROT_WRITE,
                         MAP_SHARED | MAP_POPULATE, wq_fd, IORING_OFF_CQ_RING);
 
-    if (cq_ptr == MAP_FAILED) return -1;
+    if (cq_ptr == MAP_FAILED)
+        return -1;
 
     h->cr.khead = cq_ptr + params->cq_off.head;
     h->cr.ktail = cq_ptr + params->cq_off.tail;
@@ -329,7 +336,8 @@ static inline int _hring_get_mpool_parts_from_name(
 
     DIR* dir = opendir("/dev/shm");
 
-    if (dir == NULL) return -1;
+    if (dir == NULL)
+        return -1;
 
     while ((dent = readdir(dir)) != NULL) {
         if (strstr(dent->d_name, parts->name) != NULL) {
@@ -351,9 +359,11 @@ static int _hring_mpool_init(struct hring* h, size_t blocks) {
 
     __s32 shm = shm_open(h->id, O_CREAT | O_TRUNC | O_RDWR, S_IRWXU);
 
-    if (shm < 0) return -1;
+    if (shm < 0)
+        return -1;
 
-    if (ftruncate(shm, BLOCK_SIZE * (blocks + 1)) == -1) goto cleanup;
+    if (ftruncate(shm, BLOCK_SIZE * (blocks + 1)) == -1)
+        goto cleanup;
 
     if ((h->pool.bitmap =
              mmap(0, BLOCK_SIZE * (blocks + 1), PROT_READ | PROT_WRITE,
@@ -373,7 +383,8 @@ static int _hring_mpool_attach(struct hring* h) {
     struct hring_mpool* pool = &h->pool;
 
     __s32 memfd = shm_open(h->id, O_RDWR, 0);  // submitter will unlink
-    if (memfd == -1) return -1;
+    if (memfd == -1)
+        return -1;
 
     size_t size = file_size(memfd);
 
@@ -395,7 +406,8 @@ static inline int _hring_setup(struct hring* h, struct io_uring_params* params,
                                size_t const blocks) {
     assert(parts->name != NULL);
 
-    if ((h->fd = __io_uring_setup(blocks, params)) < 0) return h->fd;
+    if ((h->fd = __io_uring_setup(blocks, params)) < 0)
+        return h->fd;
 
     parts->pid = getpid();
     parts->fd = h->fd;
@@ -415,8 +427,10 @@ int hring_init(struct hring* h, char* name, size_t blocks) {
 
     int ret;
 
-    if ((ret = _hring_setup(h, &params, &parts, blocks)) < 0) goto end;
-    if ((ret = _hring_mpool_init(h, blocks)) == -1) goto end;
+    if ((ret = _hring_setup(h, &params, &parts, blocks)) < 0)
+        goto end;
+    if ((ret = _hring_mpool_init(h, blocks)) == -1)
+        goto end;
 
     ret = __hring_map_sring(h, &params);
 
@@ -435,7 +449,8 @@ static inline char* _hring_parts_and_id_from_name(
 static inline int _hring_pidfd_get_wq_fd(pid_t pid, __s32 fd) {
     __s32 pid_fd, wq_fd;
 
-    if ((pid_fd = pidfd_open(pid)) == -1) return -1;
+    if ((pid_fd = pidfd_open(pid)) == -1)
+        return -1;
 
     wq_fd = pidfd_getfd(pid_fd, fd);
 
@@ -452,7 +467,8 @@ static inline int _hring_attach_setup(struct hring* h,
     p->wq_fd = wq_fd;
 
     h->fd = ret = __io_uring_setup(h->pool.blocks, p);
-    if (ret < 0) return ret;
+    if (ret < 0)
+        return ret;
 
     h->features = p->features;
 
@@ -465,7 +481,8 @@ int hring_attach(struct hring* h, char* name) {
 
     __s32 ret;
 
-    if ((h->id = _hring_parts_and_id_from_name(&parts)) == NULL) return -1;
+    if ((h->id = _hring_parts_and_id_from_name(&parts)) == NULL)
+        return -1;
 
     __s32 wq_fd = ret = _hring_pidfd_get_wq_fd(parts.pid, parts.fd);
     if (ret == -1) {
@@ -475,11 +492,14 @@ int hring_attach(struct hring* h, char* name) {
         return ret;
     }
 
-    if ((ret = _hring_mpool_attach(h)) < 0) goto cleanup;
+    if ((ret = _hring_mpool_attach(h)) < 0)
+        goto cleanup;
 
-    if ((ret = _hring_attach_setup(h, &params, wq_fd)) < 0) goto cleanup;
+    if ((ret = _hring_attach_setup(h, &params, wq_fd)) < 0)
+        goto cleanup;
 
-    if ((ret = _hring_map_cring(h, &params, wq_fd)) < 0) goto cleanup;
+    if ((ret = _hring_map_cring(h, &params, wq_fd)) < 0)
+        goto cleanup;
 
     return ret;
 }

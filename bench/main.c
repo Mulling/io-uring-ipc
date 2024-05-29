@@ -37,7 +37,8 @@ void callback(struct hring* h, struct io_uring_cqe const* const cqe) {
 int child_main() {
     struct hring h;
 
-    if (hring_attach(&h, "uring_shm") < 0) die("hring_attach");
+    if (hring_attach(&h, "uring_shm") < 0)
+        die("hring_attach");
 
     size_t total = target;
 
@@ -60,11 +61,13 @@ int child_main() {
 
 int main([[maybe_unused]] int argc, char** argv) {
     // run the completion side
-    if (strcmp("child", argv[0]) == 0) return child_main();
+    if (strcmp("child", argv[0]) == 0)
+        return child_main();
 
     struct hring h = { 0 };
 
-    if (hring_init(&h, "uring_shm", 1024) < 0) die("hring_init");
+    if (hring_init(&h, "uring_shm", 1024) < 0)
+        die("hring_init");
 
     pid_t pid = fork();
 
@@ -73,7 +76,8 @@ int main([[maybe_unused]] int argc, char** argv) {
             struct timeval start = { 0 };
             struct timeval end = { 0 };
 
-            if (gettimeofday(&start, NULL) == -1) die("gettimeofday");
+            if (gettimeofday(&start, NULL) == -1)
+                die("gettimeofday");
 
             for (size_t i = 0, qed = 0; i < target; i++) {
                 hring_addr_t addr;
@@ -88,7 +92,8 @@ int main([[maybe_unused]] int argc, char** argv) {
 
                 qed = hring_try_que(&h, addr);
 
-                if (!qed) printf("fail to que\n");
+                if (!qed)
+                    printf("fail to que\n");
 
                 hring_submit(&h, qed == 32);
             }
@@ -96,7 +101,8 @@ int main([[maybe_unused]] int argc, char** argv) {
             // send any remaining
             hring_submit(&h, true);
 
-            if (gettimeofday(&end, NULL) == -1) die("gettimeofday");
+            if (gettimeofday(&end, NULL) == -1)
+                die("gettimeofday");
             __u64 diff = (end.tv_sec - start.tv_sec) * 1000000 -
                          (end.tv_usec - start.tv_usec);
 
@@ -119,7 +125,8 @@ int main([[maybe_unused]] int argc, char** argv) {
         case 0: {  // child
             char* args[] = { "child", NULL };
 
-            if (execv(argv[0], args) == -1) die("execv");
+            if (execv(argv[0], args) == -1)
+                die("execv");
         } break;
 
         case -1:
