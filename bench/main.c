@@ -25,118 +25,112 @@
 size_t target = TSIZE;
 size_t c = 0;
 
-void print_msg_cb(struct hring* h, struct io_uring_cqe const* const cqe) {
+void callback(struct hring* h, struct io_uring_cqe const* const cqe) {
     target--;
     c++;
 
     // printf("%X %s\n", cqe->flags, msg);
 
-    hring_free(h, cqe->user_data);
+    hring_mpool_free(h, cqe->user_data);
 }
 
-int main(int argc, char** argv) {
-    if (argc == 3) {
-        __s32 fd = atoi(argv[1]);
+int child_main() {
+    struct hring h;
 
-        __s32 pidfd = pidfd_open(getppid());
+    if (hring_attach(&h, "uring_shm") < 0)
+        die("hring_attach");
 
-        if (pidfd == -1) die("pidfd_getfd");
+    size_t total = target;
 
-        __s32 wq_fd = pidfd_getfd(pidfd, fd);
+    time_t last = time(NULL);
 
-        if (wq_fd == -1) die("pidfd_getfd");
-
-        struct hring h;
-
-        hring_attatch(&h, "uring_shm");
-
-        size_t total = target;
-
-        time_t last = time(NULL);
-
-        while (target) {
-            if (time(NULL) - last >= 1) {
-                printf("left = %lu, deque %lu(%2.2F%%) messages, %1.2F GiB/s\n",
-                       target, c, c / (double)total * 100,
-                       (double)(c * sizeof(size_t)) / (1024 * 1024 * 1024));
-                last = time(NULL);
-                c = 0;
-            }
-
-            hring_deque(&h, print_msg_cb);
+    while (target) {
+        if (time(NULL) - last >= 1) {
+            printf("left = %lu, deque %lu(%2.2F%%) messages, %1.2F GiB/s\n",
+                   target, c, c / (double)total * 100,
+                   (double)(c * sizeof(size_t)) / (1024 * 1024 * 1024));
+            last = time(NULL);
+            c = 0;
         }
 
-        return 0;
+        hring_deque(&h, callback);
     }
+
+    return 0;
+}
+
+int main([[maybe_unused]] int argc, char** argv) {
+    // run the completion side
+    if (strcmp("child", argv[0]) == 0)
+        return child_main();
 
     struct hring h = { 0 };
 
-    if (hring_init(&h, "uring_shm", 4096) < 0) die("hring_init");
+    if (hring_init(&h, "uring_shm", 1024) < 0)
+        die("hring_init");
 
-    int pid = fork();
+    pid_t pid = fork();
 
-    if (pid == -1) {
-        die("fork");
-    } else if (pid == 0) {
-        char fd_str[256];
+    switch (pid) {
+        default: {  // parent, run the submission side
+            struct timeval start = { 0 };
+            struct timeval end = { 0 };
 
-        snprintf(fd_str, 256, "%d", h.fd);
+            if (gettimeofday(&start, NULL) == -1)
+                die("gettimeofday");
 
-        char pid_str[256];
-        snprintf(pid_str, 256, "%d", getpid());
+            for (size_t i = 0, qed = 0; i < target; i++) {
+                hring_addr_t addr;
 
-        const char* path = argv[0];
+                do {
+                    addr = hring_mpool_alloc(&h, 1);
+                } while (!addr);
 
-        char* argv[] = { "child", fd_str, pid_str, 0 };
+                size_t* msg = hring_deref(&h, addr);
 
-        if (execv(path, argv) == -1) die("execv");
-    } else {
-        struct timeval start = { 0 };
-        struct timeval end = { 0 };
+                *msg = i;
 
-        if (gettimeofday(&start, NULL) == -1) die("gettimeofday");
+                qed = hring_try_que(&h, addr);
 
-        for (size_t i = 0, qed = 0; i < target; i++) {
-            hring_addr_t addr;
+                if (!qed)
+                    printf("fail to que\n");
 
-            do {
-                addr = hring_alloc(&h, 1);
-            } while (!addr);
+                hring_submit(&h, qed == 32);
+            }
 
-            size_t* msg = hring_deref(&h, addr);
+            // send any remaining
+            hring_submit(&h, true);
 
-            *msg = i;
+            if (gettimeofday(&end, NULL) == -1)
+                die("gettimeofday");
+            __u64 diff = (end.tv_sec - start.tv_sec) * 1000000 -
+                         (end.tv_usec - start.tv_usec);
 
-            qed = hring_try_que(&h, addr);
+            double msgs_usec = (double)TSIZE / diff;
 
-            if (!qed) printf("fail to que\n");
+            printf(
+                "wait for child, sent an average of %.2F msgs/usec, average "
+                "latency "
+                "of %.2F ns\n",
+                msgs_usec, 1000.0 / msgs_usec);
 
-            hring_submit(&h, qed == 32);
-        }
+            int status;
+            waitpid(pid, &status, 0);
 
-        // send any remaining
-        hring_submit(&h, true);
+            // pp_bitmap(&h);
+            shm_unlink(h.id);
 
-        if (gettimeofday(&end, NULL) == -1) die("gettimeofday");
+            printf("child exited with status = %d\n", status);
+        } break;
+        case 0: {  // child
+            char* args[] = { "child", NULL };
 
-        __u64 diff = (end.tv_sec - start.tv_sec) * 1000000 -
-                     (end.tv_usec - start.tv_usec);
+            if (execv(argv[0], args) == -1)
+                die("execv");
+        } break;
 
-        double msgs_usec = (double)TSIZE / diff;
-
-        printf(
-            "wait for child, sent an average of %.2F msgs/usec, average "
-            "latency "
-            "of %.2F ns\n",
-            msgs_usec, 1000.0 / msgs_usec);
-
-        int status;
-        waitpid(pid, &status, 0);
-
-        // pp_bitmap(&h);
-        shm_unlink(h.id);
-
-        printf("child exited with status = %d\n", status);
+        case -1:
+            die("fork");
     }
 
     return 0;
