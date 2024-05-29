@@ -37,7 +37,7 @@ void callback(struct hring* h, struct io_uring_cqe const* const cqe) {
 int child_main() {
     struct hring h;
 
-    hring_attach(&h, "uring_shm");
+    if (hring_attach(&h, "uring_shm") < 0) die("hring_attach");
 
     size_t total = target;
 
@@ -64,7 +64,7 @@ int main([[maybe_unused]] int argc, char** argv) {
 
     struct hring h = { 0 };
 
-    if (hring_init(&h, "uring_shm", 4096) < 0) die("hring_init");
+    if (hring_init(&h, "uring_shm", 1024) < 0) die("hring_init");
 
     pid_t pid = fork();
 
