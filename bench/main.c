@@ -29,7 +29,9 @@ void callback(struct hring* h, struct io_uring_cqe const* const cqe) {
     target--;
     c++;
 
-    // printf("%X %s\n", cqe->flags, msg);
+    // usleep(100);
+
+    // printf("%X %s\n", cqe->flags, "test, this is a test");
 
     hring_mpool_free(h, cqe->user_data);
 }
@@ -66,7 +68,7 @@ int main([[maybe_unused]] int argc, char** argv) {
 
     struct hring h = { 0 };
 
-    if (hring_init(&h, "uring_shm", 1024) < 0)
+    if (hring_init(&h, "uring_shm", 4096) < 0)
         die("hring_init");
 
     pid_t pid = fork();
@@ -95,7 +97,9 @@ int main([[maybe_unused]] int argc, char** argv) {
                 if (!qed)
                     printf("fail to que\n");
 
-                hring_submit(&h, qed == 32);
+                if (hring_submit(&h, qed == 32) < 0) {
+                    printf("fail to submit");
+                };
             }
 
             // send any remaining

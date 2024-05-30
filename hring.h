@@ -163,7 +163,7 @@ static inline void* hring_deref(struct hring const* h, hring_addr_t addr) {
 
 [[gnu::always_inline]]
 static inline void _hring_fill_sqe(struct io_uring_sqe* sqe,
-                                    hring_addr_t addr) {
+                                   hring_addr_t addr) {
     sqe->flags = 0;
     sqe->ioprio = 0;
     sqe->rw_flags = 0;
@@ -217,11 +217,11 @@ static __u32 _hring_flush_sr(struct hring* h) {
 }
 
 int hring_submit(struct hring* h, bool force) {
-    bool enter = force || _hring_read_once(*h->sr.kflags) &
-                              (IORING_SQ_CQ_OVERFLOW | IORING_SQ_TASKRUN);
+    bool enter = _hring_read_once(*h->sr.kflags) &
+                 (IORING_SQ_CQ_OVERFLOW | IORING_SQ_TASKRUN);
 
-    if (enter)
-        return __io_uring_enter(h->fd, _hring_flush_sr(h), 0,
+    if (enter || force)
+        return __io_uring_enter(h->fd, force ? _hring_flush_sr(h) : 0, 0,
                                 IORING_ENTER_GETEVENTS);
     else
         return 0;
@@ -239,7 +239,7 @@ void hring_deque(struct hring* h,
         if (head == tail)
             break;
 
-        struct io_uring_cqe* cqe = &h->cr.cqes[head & h->cr.ring_mask];
+        struct io_uring_cqe* cqe = &cr->cqes[head & cr->ring_mask];
 
         cb(h, cqe);
 
@@ -310,8 +310,8 @@ struct _hring_mpool_parts {
     char* name;
 };
 
-inline static void _hring_mpool_parts_from_id(
-    struct _hring_mpool_parts* parts, char const* const id) {
+inline static void _hring_mpool_parts_from_id(struct _hring_mpool_parts* parts,
+                                              char const* const id) {
     sscanf(id, "%*[^:]:%d:%d", &parts->fd,
            &parts->pid);  // trust thy all might parser
 }
