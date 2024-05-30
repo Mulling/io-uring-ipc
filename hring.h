@@ -255,12 +255,7 @@ void hring_deque(struct hring* h,
 static int _hring_map_sring(struct hring* h, struct io_uring_params* p) {
     struct sring* sr = &h->sr;
 
-    size_t crsize =
-        p->cq_off.cqes + p->cq_entries * sizeof(struct io_uring_cqe);
     size_t srsize = p->sq_off.array + p->sq_entries * sizeof(__u32);
-
-    if (p->features & IORING_FEAT_SINGLE_MMAP && crsize > srsize)
-        srsize = crsize;
 
     void* sq_ptr = mmap(0, srsize, PROT_READ | PROT_WRITE,
                         MAP_SHARED | MAP_POPULATE, h->fd, IORING_OFF_SQ_RING);
