@@ -216,6 +216,11 @@ static __u32 _hring_flush_sr(struct hring* h) {
     return tail - _hring_read_once(*sr->khead);
 }
 
+static inline bool _hring_sr_should_enter(struct hring* h) {
+    return _hring_read_once(*h->sr.kflags) &
+           (IORING_SQ_CQ_OVERFLOW | IORING_SQ_TASKRUN);
+}
+
 int hring_submit(struct hring* h, bool force) {
     bool enter = _hring_read_once(*h->sr.kflags) &
                  (IORING_SQ_CQ_OVERFLOW | IORING_SQ_TASKRUN);
@@ -227,23 +232,40 @@ int hring_submit(struct hring* h, bool force) {
         return 0;
 }
 
-void hring_deque(struct hring* h,
-                 void (*cb)(struct hring*, struct io_uring_cqe const* const)) {
+[[gnu::always_inline]]
+inline bool hring_has_overflown(struct hring* h) {
+    return _hring_read_once(*h->sr.kflags) & IORING_SQ_CQ_OVERFLOW;
+}
+
+int hring_drive_till_completion(struct hring* h) {
+    int ret;
+
+    while (_hring_sr_should_enter(h)) {
+        if ((ret = __io_uring_enter(h->fd, 0, 0, IORING_ENTER_GETEVENTS)) < 0)
+            return ret;
+    }
+
+    return 0;
+}
+
+void hring_deque_with_callback(struct hring* h,
+                               void (*cb)(struct hring*,
+                                          struct io_uring_cqe const* const)) {
     struct cring* cr = &h->cr;
 
     __u32 head = *cr->khead;
     __u32 tail = _hring_smp_load_acquire(cr->ktail);
+
     __u32 nr = 0;
 
     do {
-        if (head == tail)
+        if (head + nr == tail)
             break;
 
-        struct io_uring_cqe* cqe = &cr->cqes[head & cr->ring_mask];
+        struct io_uring_cqe* cqe = &cr->cqes[(head + nr) & cr->ring_mask];
 
         cb(h, cqe);
 
-        head++;
         nr++;
 
     } while (true);

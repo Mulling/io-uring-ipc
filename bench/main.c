@@ -20,7 +20,8 @@
 
 #define TSIZE 1024 * 100000
 
-#define die(s) (printf(__FILE__ ":%d: ", __LINE__), perror(s), exit(1))
+#define warn(s) (printf(__FILE__ ":%d: ", __LINE__), perror(s))
+#define die(s) (warn(s), exit(1))
 
 size_t target = TSIZE;
 size_t c = 0;
@@ -29,11 +30,9 @@ void callback(struct hring* h, struct io_uring_cqe const* const cqe) {
     target--;
     c++;
 
-    // usleep(100);
+    usleep(10);
 
-    // printf("%X %s\n", cqe->flags, "test, this is a test");
-
-    hring_mpool_free(h, cqe->user_data);
+    // hring_mpool_free(h, cqe->user_data);
 }
 
 int child_main() {
@@ -55,7 +54,7 @@ int child_main() {
             c = 0;
         }
 
-        hring_deque(&h, callback);
+        hring_deque_with_callback(&h, callback);
     }
 
     return 0;
@@ -84,26 +83,31 @@ int main([[maybe_unused]] int argc, char** argv) {
             for (size_t i = 0, qed = 0; i < target; i++) {
                 hring_addr_t addr;
 
-                do {
-                    addr = hring_mpool_alloc(&h, 1);
-                } while (!addr);
+                // do {
+                //     addr = hring_mpool_alloc(&h, 1);
 
-                size_t* msg = hring_deref(&h, addr);
+                //     if (!addr) {
+                //         warn("hring_mpool_alloc: could not allocate");
 
-                *msg = i;
+                //         usleep(10);
+                //     }
 
-                qed = hring_try_que(&h, addr);
+                // } while (!addr);
 
-                if (!qed)
-                    printf("fail to que\n");
+                // size_t* msg = hring_deref(&h, addr);
 
-                if (hring_submit(&h, qed == 32) < 0) {
-                    printf("fail to submit");
-                };
+                // *msg = i;
+
+                if ((qed = hring_try_que(&h, addr)) == 0)
+                    warn("hring_try_que: fail to queue addr");
+
+                if (hring_submit(&h, qed == 32) < 0)
+                    warn("hring_submit: fail to submit");
             }
 
             // send any remaining
-            hring_submit(&h, true);
+            if (hring_submit(&h, true) < 0)
+                warn("hring_submit: fail to submit remaining entries");
 
             if (gettimeofday(&end, NULL) == -1)
                 die("gettimeofday");
@@ -119,6 +123,10 @@ int main([[maybe_unused]] int argc, char** argv) {
                 msgs_usec, 1000.0 / msgs_usec);
 
             int status;
+
+            if (hring_drive_till_completion(&h) < 0)
+                warn("hring_drive_till_completion");
+
             waitpid(pid, &status, 0);
 
             // pp_bitmap(&h);
