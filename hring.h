@@ -222,8 +222,7 @@ static inline bool _hring_sr_should_enter(struct hring* h) {
 }
 
 int hring_submit(struct hring* h, bool force) {
-    bool enter = _hring_read_once(*h->sr.kflags) &
-                 (IORING_SQ_CQ_OVERFLOW | IORING_SQ_TASKRUN);
+    bool enter = _hring_sr_should_enter(h);
 
     if (enter || force)
         return __io_uring_enter(h->fd, force ? _hring_flush_sr(h) : 0, 0,
@@ -237,22 +236,12 @@ inline bool hring_has_overflown(struct hring* h) {
     return _hring_read_once(*h->sr.kflags) & IORING_SQ_CQ_OVERFLOW;
 }
 
-int hring_drive_till_completion(struct hring* h) {
-    int ret;
-
-    while (_hring_sr_should_enter(h)) {
-        if ((ret = __io_uring_enter(h->fd, 0, 0, IORING_ENTER_GETEVENTS)) < 0)
-            return ret;
-    }
-
-    return 0;
-}
-
-void hring_deque_with_callback(struct hring* h,
-                               void (*cb)(struct hring*,
-                                          struct io_uring_cqe const* const)) {
+int hring_deque_with_callback(struct hring* h,
+                              void (*cb)(struct hring*,
+                                         struct io_uring_cqe const* const)) {
     struct cring* cr = &h->cr;
 
+    int ret = 0;
     __u32 head = *cr->khead;
     __u32 tail = _hring_smp_load_acquire(cr->ktail);
 
@@ -272,6 +261,12 @@ void hring_deque_with_callback(struct hring* h,
 
     if (nr)
         _hring_smp_store_release(cr->khead, *cr->khead + nr);
+    else
+        // since we do not map the sring flags, enter the kernel to drive the
+        // runtime forward
+        ret = __io_uring_enter(h->fd, 0, 0, IORING_ENTER_GETEVENTS);
+
+    return ret;
 }
 
 static int _hring_map_sring(struct hring* h, struct io_uring_params* p) {
@@ -487,10 +482,12 @@ static inline int _hring_attach_setup(struct hring* h,
 
     p->wq_fd = wq_fd;
 
-    h->fd = ret = __io_uring_setup(h->pool.blocks, p);
+    ret = __io_uring_setup(h->pool.blocks, p);
     if (ret < 0)
         return ret;
 
+    h->fd = wq_fd;  // the setup abover return the wrong file descriptor for
+                    // the uring, just use the correct one
     h->features = p->features;
 
     return 0;
