@@ -82,7 +82,7 @@ int main([[maybe_unused]] int argc, char** argv) {
 
     struct hring h = { 0 };
 
-    if (hring_init(&h, "uring_shm", 4096) < 0)
+    if (hring_init(&h, "uring_shm", 32) < 0)
         die("hring_init");
 
     pid_t pid = fork();

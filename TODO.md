@@ -1,1 +1,3 @@
 - Allow for generic allocators
+- Add more allocators
+- Allow for arbitrary sq and cq sizes

@@ -455,6 +455,8 @@ static inline int _hring_setup(struct hring* h, struct io_uring_params* params,
     if ((h->fd = __io_uring_setup(blocks, params)) < 0)
         return h->fd;
 
+    printf("cq_entries = %u\n", params->cq_entries);
+
     parts->pid = getpid();
     parts->fd = h->fd;
 
@@ -466,7 +468,9 @@ static inline int _hring_setup(struct hring* h, struct io_uring_params* params,
 
 int hring_init(struct hring* h, char* name, size_t blocks) {
     struct io_uring_params params = { .flags = IORING_SETUP_SINGLE_ISSUER |
-                                               IORING_SETUP_NO_SQARRAY };
+                                               IORING_SETUP_NO_SQARRAY |
+                                               IORING_SETUP_CQSIZE,
+                                      .cq_entries = blocks << 8 };
     struct _hring_mpool_parts parts = {
         .name = name,
     };
@@ -514,6 +518,11 @@ static inline int _hring_attach_setup(struct hring* h,
     ret = __io_uring_setup(h->pool.blocks, p);
     if (ret < 0)
         return ret;
+
+    // FIXME: get the sq and cq size from the pool parts
+    p->cq_entries = p->sq_entries
+                    << 8;  // since we call setup again with pool.blocks, we get
+                           // the wrong value when using IORING_SETUP_CQSIZE
 
     h->fd = wq_fd;  // the setup above returns the wrong file descriptor for
                     // the uring, just use the correct one
