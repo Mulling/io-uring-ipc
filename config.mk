@@ -7,6 +7,8 @@ HRING_FLAGS := -std=gnu2x                   \
 			   -Wno-pointer-arith           \
 			   -g ${CFLAGS}
 
+HRING_PERF_EVENTS :=cache-references,cache-misses,cycles,instructions,branches,faults,migrations
+
 ifndef VERBOSE
 .SILENT:
 

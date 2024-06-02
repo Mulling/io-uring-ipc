@@ -1,14 +1,12 @@
 # io_uring IPC
 
-*Not stable yet, don't use for anything serious.*
+Using `IORING_OP_NOP` it's possible to send arbitrary data (up to 64 bits) to another process, with it, it's also possible to share memory-pool entries (address). Meaning, you can send data to another process with low-latency and high throughput.
 
-Using `IORING_OP_NOP` it's possible to send arbitrary data (up to 64 bits) to another process, consequently, it's also possible to share memory-pool entries (address); meaning, you can send data to another process with very low-latency and high throughput.
-
-All the synchronization machinery is already provided -- for free -- by io_uring. You only need a shared memory-pool allocator.
+All the synchronization machinery is already provided -- for free -- by io_uring. You only need a shared memory-pool allocator (or any other allocator that suffices).
 
 ### Using:
 
-One of the limitations of this approach is that the yama security model prevents us from obtaining the file descriptor of the uring, you need either root privileges or PTRACE_MODE_ATTACH_REALCREDS, see `pidfd_getfd(2)`.
+One of the limitations of this approach is that the yama security model prevents us from obtaining the file descriptor of the uring, you need either root privileges or `PTRACE_MODE_ATTACH_REALCREDS`, see `pidfd_getfd(2)`.
 
 Another option is to disable it completely.
 
@@ -20,11 +18,10 @@ To send a message:
 ```C
 #include "hring.h"
 
+char const* const addr = "hring_shm"; // will be used to search /dev/shm (must be unique)
+
 struct hring h;
-hring_init(&h, "ipc-name/id", 4096)
-/*              ^
-                |
-                +-- will be used to search /dev/shm (must be unique) */
+hring_init(&h, addr, 4096);
 
 hring_addr_t addr = hring_alloc(&h, sizeof(int));
 
@@ -41,25 +38,26 @@ To receive a message:
 ```C
 #include "hring.h"
 
-// consumer:
+char const* const addr = "hring_shm";
+
 struct hring h;
-hring_attach(&h, "ipc-name/id");
+hring_attach(&h, addr);
 
-hring_deque(&h, callback);
-/*              ^
-                |
-                |
-                |
-                v
-*/         void callback(struct hring* h, struct io_uring_cqe const* const cqe) {
-               hring_addr_t addr = cqe->user_data;
+hring_deque_with_callback(&h, callback);
+/*                            ^
+                              |   Try to dequeue all entries, calling callback for each.
+     +------------------------+
+     |
+     v                            */
+void callback(struct hring* h, struct io_uring_cqe const* const cqe) {
+   hring_addr_t addr = cqe->user_data;
 
-               int* val = hring_deref(h, addr);
+   int* val = hring_deref(h, addr);
 
-               // do something with val;
+   // do something with val;
 
-               hring_free(h, addr);
-           }
+   hring_free(h, addr);
+}
 ```
 
 ### Building:

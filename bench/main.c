@@ -1,3 +1,4 @@
+#include <bits/types/struct_timeval.h>
 #include <fcntl.h>
 #include <linux/fs.h>
 #include <linux/io_uring.h>
@@ -18,44 +19,58 @@
 
 #include "hring.h"
 
-#define TSIZE 1024 * 100000
+#define TSIZE (1024 * 100000)
 
 #define warn(s) (printf(__FILE__ ":%d: ", __LINE__), perror(s))
 #define die(s) (warn(s), exit(1))
 
+bool print = false;
+
 size_t target = TSIZE;
-size_t c = 0;
 
 void callback(struct hring* h, struct io_uring_cqe const* const cqe) {
     target--;
-    c++;
 
-    usleep(10);
+    // usleep(1);
 
-    //hring_mpool_free(h, cqe->user_data);
+    // hring_mpool_free(h, cqe->user_data);
+}
+
+double time_diff(struct timeval const* const a, struct timeval const* const b) {
+    return ((a->tv_sec - b->tv_sec) * 1000000) + (a->tv_usec - b->tv_usec);
 }
 
 int child_main() {
-    struct hring h;
+    struct timeval start = { 0 };
+    struct timeval end = { 0 };
+
+    struct hring h = { 0 };
 
     if (hring_attach(&h, "uring_shm") < 0)
         die("hring_attach");
 
-    size_t total = target;
-
-    time_t last = time(NULL);
+    if (gettimeofday(&start, NULL) == -1)
+        die("gettimeofday");
 
     while (target) {
-        if (time(NULL) - last >= 1) {
-            printf("left = %lu, deque %lu(%2.2F%%) messages, %1.2F GiB/s\n",
-                   target, c, c / (double)total * 100,
-                   (double)(c * sizeof(size_t)) / (1024 * 1024 * 1024));
-            last = time(NULL);
-            c = 0;
-        }
+        // hring_addr_t addr;
+
+        // if (hring_deque_once(&h, &addr) < 0)
+        //     warn("hring_deque_once");
+
+        // target--;
+        // c++;
 
         hring_deque_with_callback(&h, callback);
     }
+
+    if (gettimeofday(&end, NULL) == -1)
+        die("gettimeofday");
+
+    double diff_secs = (double)time_diff(&end, &start) / 1000000.0;
+
+    printf("deque %d messages in %1.2Fs (%1.2F GiB/s)\n", TSIZE, diff_secs,
+           (double)(TSIZE * sizeof(size_t)) / (1024 * 1024 * 1024) / diff_secs);
 
     return 0;
 }
@@ -111,10 +126,8 @@ int main([[maybe_unused]] int argc, char** argv) {
 
             if (gettimeofday(&end, NULL) == -1)
                 die("gettimeofday");
-            __u64 diff = (end.tv_sec - start.tv_sec) * 1000000 -
-                         (end.tv_usec - start.tv_usec);
 
-            double msgs_usec = (double)TSIZE / diff;
+            double msgs_usec = (double)TSIZE / time_diff(&end, &start);
 
             printf(
                 "wait for child, sent an average of %.2F msgs/usec, average "
@@ -123,9 +136,6 @@ int main([[maybe_unused]] int argc, char** argv) {
                 msgs_usec, 1000.0 / msgs_usec);
 
             int status;
-
-            //if (hring_drive_till_completion(&h) < 0)
-            //    warn("hring_drive_till_completion");
 
             waitpid(pid, &status, 0);
 

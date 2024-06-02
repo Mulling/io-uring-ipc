@@ -232,8 +232,37 @@ int hring_submit(struct hring* h, bool force) {
 }
 
 [[gnu::always_inline]]
-inline bool hring_has_overflown(struct hring* h) {
+inline bool hring_sring_overflown(struct hring* h) {
     return _hring_read_once(*h->sr.kflags) & IORING_SQ_CQ_OVERFLOW;
+}
+
+inline int hring_deque_once(struct hring* h, hring_addr_t* addr) {
+    struct cring* cr = &h->cr;
+
+    bool enter = true;
+
+again:;
+    __u32 head = *cr->khead;
+    __u32 tail = _hring_smp_load_acquire(cr->ktail);
+
+    int ret = 0;
+
+    if (head != tail) {
+        struct io_uring_cqe* cqe = &cr->cqes[head & cr->ring_mask];
+
+        *addr = cqe->user_data;
+
+        _hring_smp_store_release(cr->khead, *cr->khead + 1);
+    } else if (enter) {
+        if ((ret = __io_uring_enter(h->fd, 0, 1, IORING_ENTER_GETEVENTS)) < 0)
+            return ret;
+
+        enter = false;
+
+        goto again;
+    }
+
+    return ret;
 }
 
 int hring_deque_with_callback(struct hring* h,
@@ -241,11 +270,11 @@ int hring_deque_with_callback(struct hring* h,
                                          struct io_uring_cqe const* const)) {
     struct cring* cr = &h->cr;
 
-    int ret = 0;
     __u32 head = *cr->khead;
     __u32 tail = _hring_smp_load_acquire(cr->ktail);
-
     __u32 nr = 0;
+
+    int ret = 0;
 
     do {
         if (head + nr == tail)
@@ -291,7 +320,7 @@ static int _hring_map_sring(struct hring* h, struct io_uring_params* p) {
                          h->fd, IORING_OFF_SQES)) == MAP_FAILED) {
         munmap(sq_ptr, srsize);
         return -1;
-    };
+    }
 
     return 0;
 }
@@ -486,7 +515,7 @@ static inline int _hring_attach_setup(struct hring* h,
     if (ret < 0)
         return ret;
 
-    h->fd = wq_fd;  // the setup abover return the wrong file descriptor for
+    h->fd = wq_fd;  // the setup above returns the wrong file descriptor for
                     // the uring, just use the correct one
     h->features = p->features;
 
