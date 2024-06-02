@@ -485,7 +485,6 @@ static inline int _hring_attach_setup(struct hring* h,
                                       struct io_uring_params* p, int wq_fd) {
     int ret;
 
-    p->flags |= IORING_SETUP_ATTACH_WQ;
     p->wq_fd = wq_fd;
 
     h->fd = ret = __io_uring_setup(h->pool.blocks, p);

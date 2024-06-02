@@ -30,9 +30,9 @@ void callback(struct hring* h, struct io_uring_cqe const* const cqe) {
     target--;
     c++;
 
-    usleep(10);
+    // usleep(10);
 
-    // hring_mpool_free(h, cqe->user_data);
+    hring_mpool_free(h, cqe->user_data);
 }
 
 int child_main() {
@@ -83,20 +83,20 @@ int main([[maybe_unused]] int argc, char** argv) {
             for (size_t i = 0, qed = 0; i < target; i++) {
                 hring_addr_t addr;
 
-                // do {
-                //     addr = hring_mpool_alloc(&h, 1);
+                do {
+                    addr = hring_mpool_alloc(&h, 1);
 
-                //     if (!addr) {
-                //         warn("hring_mpool_alloc: could not allocate");
+                    if (!addr) {
+                        warn("hring_mpool_alloc: could not allocate");
 
-                //         usleep(10);
-                //     }
+                        usleep(10);
+                    }
 
-                // } while (!addr);
+                } while (!addr);
 
-                // size_t* msg = hring_deref(&h, addr);
+                size_t* msg = hring_deref(&h, addr);
 
-                // *msg = i;
+                *msg = i;
 
                 if ((qed = hring_try_que(&h, addr)) == 0)
                     warn("hring_try_que: fail to queue addr");
