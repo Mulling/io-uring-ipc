@@ -10,7 +10,7 @@ main: main.o
 
 t: test
 test: main cleanup
-	$(QUIET_TEST)./main
+	$(QUIET_TEST) ./main
 
 p: perf
 perf: HRING_FLAGS = -std=gnu2x -flto -O3 -g ${CFLAGS} -DNDEBUG

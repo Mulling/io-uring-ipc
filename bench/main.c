@@ -31,9 +31,9 @@ size_t target = TSIZE;
 void callback(struct hring* h, struct io_uring_cqe const* const cqe) {
     target--;
 
-    // usleep(1);
+    // printf("%lu\n", *(size_t*)hring_deref(h, cqe->user_data));
 
-    // hring_mpool_free(h, cqe->user_data);
+    hring_mpool_free(h, cqe->user_data);
 }
 
 double time_diff(struct timeval const* const a, struct timeval const* const b) {
@@ -82,7 +82,7 @@ int main([[maybe_unused]] int argc, char** argv) {
 
     struct hring h = { 0 };
 
-    if (hring_init(&h, "uring_shm", 32) < 0)
+    if (hring_init(&h, "uring_shm", 4096, 32, 32 << 8) < 0)
         die("hring_init");
 
     pid_t pid = fork();
@@ -98,22 +98,22 @@ int main([[maybe_unused]] int argc, char** argv) {
             for (size_t i = 0, qed = 0; i < target; i++) {
                 hring_addr_t addr;
 
-                // do {
-                //     addr = hring_mpool_alloc(&h, 1);
+                do {
+                    addr = hring_mpool_alloc(&h, 1);
 
-                //     if (!addr) {
-                //         warn("hring_mpool_alloc: could not allocate");
+                    // if (!addr) {
+                    //     // warn("hring_mpool_alloc: could not allocate");
 
-                //         usleep(10);
-                //     }
+                    //     usleep(1);
+                    // }
 
-                // } while (!addr);
+                } while (!addr);
 
-                // size_t* msg = hring_deref(&h, addr);
+                size_t* msg = hring_deref(&h, addr);
 
-                // *msg = i;
+                *msg = i;
 
-                if ((qed = hring_try_que(&h, 0)) == 0)
+                if ((qed = hring_try_que(&h, addr)) == 0)
                     warn("hring_try_que: fail to queue addr");
 
                 if (hring_submit(&h, qed == 32) < 0)

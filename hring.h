@@ -32,6 +32,10 @@
 #define hring_addr_off(addr) (0xFFFFFFFF & (addr))
 #define hring_addr_len(addr) ((addr) >> 32)
 
+#ifndef NDEBUG
+#define _hring_is_power2(val) (((val) & ((val)-1)) == 0)
+#endif
+
 typedef __u64 hring_addr_t;
 
 struct hring_mpool {
@@ -471,18 +475,23 @@ static inline int _hring_setup(struct hring* h, struct io_uring_params* p,
     return 0;
 }
 
-int hring_init(struct hring* h, char* name, size_t blocks) {
+int hring_init(struct hring* h, char* name, size_t blocks, size_t sr_size,
+               size_t cr_size) {
+    assert(sr_size <= cr_size);
+    assert(_hring_is_power2(sr_size));
+    assert(_hring_is_power2(cr_size));
+
     struct io_uring_params params = { .flags = IORING_SETUP_SINGLE_ISSUER |
                                                IORING_SETUP_NO_SQARRAY |
                                                IORING_SETUP_CQSIZE,
-                                      .cq_entries = blocks << 8 };
+                                      .cq_entries = cr_size };
     struct _hring_mpool_parts parts = {
         .name = name,
     };
 
     int ret;
 
-    if ((ret = _hring_setup(h, &params, &parts, blocks)) < 0)
+    if ((ret = _hring_setup(h, &params, &parts, sr_size)) < 0)
         goto end;
     if ((ret = _hring_mpool_init(h, blocks)) == -1)
         goto end;
