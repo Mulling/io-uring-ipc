@@ -1,12 +1,10 @@
 # io_uring IPC
 
-Using `IORING_OP_NOP` it's possible to send arbitrary data (up to 64 bits) to another process, with it, it's also possible to share memory-pool entries (address). Meaning, you can send data to another process with low-latency and high throughput.
-
-All the synchronization machinery is already provided -- for free -- by io_uring. You only need a shared memory-pool allocator (or any other allocator that suffices).
+Using `IORING_OP_NOP` it's possible to send arbitrary data (up to 64 bits) to another process. We can use this to share memory-pool entries, meaning, we can send data to another process. All the synchronization machinery is already provided -- for free -- by io_uring. You only need a shared memory allocator.
 
 ### Using:
 
-One of the limitations of this approach is that the yama security model prevents us from obtaining the file descriptor of the uring, you need either root privileges or `PTRACE_MODE_ATTACH_REALCREDS`, see `pidfd_getfd(2)`.
+One of the limitations of this approach is that the [yama security model](https://www.kernel.org/doc/html/latest/admin-guide/LSM/Yama.html) prevents us from obtaining the file descriptor of the uring, you need either root privileges or `PTRACE_MODE_ATTACH_REALCREDS`, see `pidfd_getfd(2)`.
 
 Another option is to disable it completely.
 
@@ -20,9 +18,24 @@ To send a message:
 
 char const* const addr = "hring_shm"; // will be used to search /dev/shm (must be unique)
 
-struct hring h;
-hring_init(&h, addr, 4096);
+struct hring h = { 0 };
 
+hring_init(&h, addr, 4096, 32, 32 << 8); // creates an entry in /dev/shm with the following format:
+//             ^           ^   ^
+//             |           |   |
+//             |           |   +--------------------------------------------------+
+//             |           |                                                      |
+//             |           +--------------------------------------------+         |
+//             |                                                        |         |
+//             +----------------------------+                           |         |
+//                                          |                           |         |
+//                                          v                           v         v
+//                                          hring_shm:<pid>:<uring_fd>:<sq_size>:<cq_size>
+//                                                     ^     ^
+//                                                     |     |
+//                                                     |     +----> uring file descriptor
+//                                                     |
+//                                                     +----------> process pid
 hring_addr_t addr = hring_alloc(&h, sizeof(int));
 
 size_t* msg = hring_deref(&h, addr);
