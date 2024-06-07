@@ -132,7 +132,7 @@ int main([[maybe_unused]] int argc, char** argv) {
             printf(
                 "wait for child, sent an average of %.2F msgs/usec, average "
                 "latency "
-                "of %.2F ns\n",
+                "of %.2Fns\n",
                 msgs_usec, 1000.0 / msgs_usec);
 
             int status;

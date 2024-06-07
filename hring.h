@@ -348,27 +348,32 @@ static int _hring_map_cring(struct hring* h, struct io_uring_params* params,
 struct _hring_mpool_parts {
     int fd;
     pid_t pid;
+    size_t sr_size;
+    size_t cr_size;
     char* name;
 };
 
 inline static void _hring_mpool_parts_from_id(struct _hring_mpool_parts* parts,
                                               char const* const id) {
-    sscanf(id, "%*[^:]:%d:%d", &parts->fd,
-           &parts->pid);  // trust thy all might parser
+    sscanf(id, "%*[^:]:%d:%d:%lu:%lu", &parts->fd, &parts->pid, &parts->sr_size,
+           &parts->cr_size);  // trust thy all might parser
 }
+
+#define _HRING_ID_FMT "%s:%d:%d:%lu:%lu"
 
 static inline char* _hring_id_from_mpool_parts(
     struct _hring_mpool_parts const* const parts) {
-    int size =
-        snprintf(NULL, 0, "%s:%d:%d", parts->name, parts->fd, parts->pid) + 1;
+    int size = 1 + snprintf(NULL, 0, _HRING_ID_FMT, parts->name, parts->fd,
+                            parts->pid, parts->sr_size, parts->cr_size);
 
-    char* id = malloc(size);  // assume it's good
+    char* id = malloc(size);  // TODO: free this
 
 #ifndef NDEBUG
-    assert(snprintf(id, size, "%s:%d:%d", parts->name, parts->fd, parts->pid) ==
-           size - 1);
+    assert(snprintf(id, size, _HRING_ID_FMT, parts->name, parts->fd, parts->pid,
+                    parts->sr_size, parts->cr_size) == size - 1);
 #else
-    snprintf(id, size, "%s:%d:%d", parts->name, parts->fd, parts->pid);
+    snprintf(id, size, _HRING_ID_FMT, parts->name, parts->fd, parts->pid,
+             parts->sr_size, parts->cr_size);
 #endif
 
     return id;
@@ -447,21 +452,21 @@ static int _hring_mpool_attach(struct hring* h) {
 }
 
 [[gnu::always_inline]]
-static inline int _hring_setup(struct hring* h, struct io_uring_params* params,
+static inline int _hring_setup(struct hring* h, struct io_uring_params* p,
                                struct _hring_mpool_parts* parts,
                                size_t const blocks) {
     assert(parts->name != NULL);
 
-    if ((h->fd = __io_uring_setup(blocks, params)) < 0)
+    if ((h->fd = __io_uring_setup(blocks, p)) < 0)
         return h->fd;
-
-    printf("cq_entries = %u\n", params->cq_entries);
 
     parts->pid = getpid();
     parts->fd = h->fd;
+    parts->sr_size = p->sq_entries;
+    parts->cr_size = p->cq_entries;
 
     h->id = _hring_id_from_mpool_parts(parts);
-    h->features = params->features;
+    h->features = p->features;
 
     return 0;
 }
@@ -510,22 +515,20 @@ static inline int _hring_pidfd_get_wq_fd(pid_t pid, __s32 fd) {
 }
 
 static inline int _hring_attach_setup(struct hring* h,
-                                      struct io_uring_params* p, int wq_fd) {
+                                      struct io_uring_params* p, int wq_fd,
+                                      size_t sr_size, size_t cr_size) {
     int ret;
 
-    p->wq_fd = wq_fd;
+    p->flags |= IORING_SETUP_CQSIZE;
+    p->cq_entries = cr_size;
 
-    ret = __io_uring_setup(h->pool.blocks, p);
+    ret = __io_uring_setup(sr_size, p);  // use setup to obtain the offsets
     if (ret < 0)
         return ret;
 
-    // FIXME: get the sq and cq size from the pool parts
-    p->cq_entries = p->sq_entries
-                    << 8;  // since we call setup again with pool.blocks, we get
-                           // the wrong value when using IORING_SETUP_CQSIZE
+    close(ret);
 
-    h->fd = wq_fd;  // the setup above returns the wrong file descriptor for
-                    // the uring, just use the correct one
+    h->fd = wq_fd;
     h->features = p->features;
 
     return 0;
@@ -551,7 +554,8 @@ int hring_attach(struct hring* h, char* name) {
     if ((ret = _hring_mpool_attach(h)) < 0)
         goto cleanup;
 
-    if ((ret = _hring_attach_setup(h, &params, wq_fd)) < 0)
+    if ((ret = _hring_attach_setup(h, &params, wq_fd, parts.sr_size,
+                                   parts.cr_size)) < 0)
         goto cleanup;
 
     if ((ret = _hring_map_cring(h, &params, wq_fd)) < 0)
