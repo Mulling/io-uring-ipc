@@ -112,12 +112,7 @@ inline __s32 __pidfd_open(__s32 ppid) {
 }
 
 [[gnu::always_inline]]
-inline bool _bitmap_index_used(__u8* bitmap, __u32 i) {
-    return bitmap[i / 8] & (0x01 << (i & 0x07));
-}
-
-[[gnu::always_inline]]
-inline __u16 _bitmap_find_free(__u64* bitmap, __u32 i) {
+inline __u32 _bitmap_find_free(__u64* bitmap, __u32 i) {
     return __builtin_ffsll(bitmap[i]);
 }
 
@@ -128,30 +123,30 @@ inline __u32 _bitmap_block(__u32 index, __u16 bit) {
     return index + --bit;
 }
 
+#ifndef NDEBUG
 [[gnu::always_inline]]
-inline void _bitmap_alloc_fast(__u64* bitmap, __u32 i, __u16 bit) {
+inline bool _bitmap_index_is_free(__u64* bitmap, __u32 i, __u32 bit) {
+    bool used = bitmap[i] & (0x01LLU << bit);
+
+    return used;
+}
+#endif
+
+[[gnu::always_inline]]
+inline void _bitmap_alloc(__u64* bitmap, __u32 i, __u32 bit) {
     assert(bit < 64);
+    assert(_bitmap_index_is_free(bitmap, i, bit));
 
     __atomic_fetch_and(&bitmap[i], ~(0x01LLU << bit), 0);
 }
 
 [[gnu::always_inline]]
-inline void _bitmap_free_fast(__u64* bitmap, __u32 i) {
-    __atomic_fetch_or(&bitmap[i / sizeof(__u64)], 0x01LLU << (i & 0x3F), 0);
-}
+inline void _bitmap_free(__u64* bitmap, __u32 i) {
+    assert(
+        !_bitmap_index_is_free(bitmap, i / 64, i & 0x3F) ||
+        (printf("i = %u, index = %u, bit = %u\n", i, i / 64, i & 0x3F), false));
 
-[[gnu::always_inline]]
-static inline void _bitmap_alloc(__u8* bitmap, __u32 i) {
-    assert(!_bitmap_index_used(bitmap, i));
-
-    __atomic_fetch_or(&bitmap[i / 8], (0x01 << (i & 0x07)), 0);
-}
-
-[[gnu::always_inline]]
-inline void _bitmap_free(__u8* bitmap, __u32 i) {
-    assert(_bitmap_index_used(bitmap, i));
-
-    __atomic_fetch_and(&bitmap[i / 8], ~(0x01 << (i & 0x07)), 0);
+    __atomic_fetch_or(&bitmap[i / 64], 0x01LLU << (i & 0x3F), 0);
 }
 
 [[gnu::always_inline]]
@@ -172,32 +167,31 @@ hring_addr_t hring_mpool_alloc(struct hring* h, size_t size) {
 
     __u64* bitmap = h->pool.bitmap;
 
-    for (size_t i = 0; i < (h->pool.blocks / sizeof(__u64)); i++) {
-        __u16 bit = _bitmap_find_free(bitmap, i);
+    for (size_t i = 0; i < (h->pool.blocks / 64); i++) {
+        __u32 bit = _bitmap_find_free(bitmap, i);
 
-        if (bit != 0) {
-            _bitmap_alloc_fast(bitmap, i, bit - 1);
+        if (bit-- != 0) {
+            _bitmap_alloc(bitmap, i, bit);
 
-            __u32 block = _bitmap_block(i, bit);
+            return (size << 32) | ((i << 6) | bit);
+        }
 
-            return size << 32 | block;
+        // try again, this might be lower than the batch size
+        bit = _bitmap_find_free(bitmap, i);
+
+        if (bit-- != 0) {
+            _bitmap_alloc(bitmap, i, bit);
+
+            return (size << 32) | ((i << 6) | bit);
         }
     }
-
-    // for (size_t i = 0; i < h->pool.blocks; i++) {
-    //     if (!_bitmap_index_used(h->pool.bitmap, i)) {
-    //         _bitmap_alloc(h->pool.bitmap, i);
-
-    //         return size << 32 | i;
-    //     }
-    // }
 
     return 0;
 }
 
 [[gnu::always_inline]]
 inline void hring_mpool_free(struct hring* h, hring_addr_t addr) {
-    _bitmap_free_fast(h->pool.bitmap, hring_addr_off(addr));
+    _bitmap_free(h->pool.bitmap, hring_addr_off(addr));
 }
 
 [[gnu::always_inline]]

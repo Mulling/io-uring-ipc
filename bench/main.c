@@ -24,8 +24,6 @@
 #define warn(s) (printf(__FILE__ ":%d: ", __LINE__), perror(s))
 #define die(s) (warn(s), exit(1))
 
-bool print = false;
-
 size_t target = TSIZE;
 
 void callback(struct hring* h, struct io_uring_cqe const* const cqe) {
@@ -126,7 +124,6 @@ int main([[maybe_unused]] int argc, char** argv) {
                     //     usleep(1);
                     // }
 
-
                 } while (!addr);
 
                 size_t* msg = hring_deref(&h, addr);
@@ -146,6 +143,8 @@ int main([[maybe_unused]] int argc, char** argv) {
 
             if (gettimeofday(&end, NULL) == -1)
                 die("gettimeofday");
+
+            // _pp_bitmap(&h);
 
             double msgs_usec = (double)TSIZE / time_diff(&end, &start);
 
