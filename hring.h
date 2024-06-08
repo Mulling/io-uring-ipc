@@ -40,7 +40,7 @@ typedef __u64 hring_addr_t;
 
 struct hring_mpool {
     __u32 blocks;
-    __u8* bitmap;
+    __u64* bitmap;
     void* map;
 };
 
@@ -117,6 +117,30 @@ inline bool _bitmap_index_used(__u8* bitmap, __u32 i) {
 }
 
 [[gnu::always_inline]]
+inline __u16 _bitmap_find_free(__u64* bitmap, __u32 i) {
+    return __builtin_ffsll(bitmap[i]);
+}
+
+[[gnu::always_inline]]
+inline __u32 _bitmap_block(__u32 index, __u16 bit) {
+    assert(bit != 0);
+
+    return index + --bit;
+}
+
+[[gnu::always_inline]]
+inline void _bitmap_alloc_fast(__u64* bitmap, __u32 i, __u16 bit) {
+    assert(bit < 64);
+
+    __atomic_fetch_and(&bitmap[i], ~(0x01LLU << bit), 0);
+}
+
+[[gnu::always_inline]]
+inline void _bitmap_free_fast(__u64* bitmap, __u32 i) {
+    __atomic_fetch_or(&bitmap[i / sizeof(__u64)], 0x01LLU << (i & 0x3F), 0);
+}
+
+[[gnu::always_inline]]
 static inline void _bitmap_alloc(__u8* bitmap, __u32 i) {
     assert(!_bitmap_index_used(bitmap, i));
 
@@ -141,23 +165,39 @@ static inline __u32 __hring_bitmap_blocks(struct hring const* const h) {
 }
 
 hring_addr_t hring_mpool_alloc(struct hring* h, size_t size) {
+    assert(size != 0);
+
     if (size > BLOCK_SIZE)
         return 0;
 
-    for (size_t i = 0; i < h->pool.blocks; i++) {
-        if (!_bitmap_index_used(h->pool.bitmap, i)) {
-            _bitmap_alloc(h->pool.bitmap, i);
+    __u64* bitmap = h->pool.bitmap;
 
-            return size << 32 | i;
+    for (size_t i = 0; i < (h->pool.blocks / sizeof(__u64)); i++) {
+        __u16 bit = _bitmap_find_free(bitmap, i);
+
+        if (bit != 0) {
+            _bitmap_alloc_fast(bitmap, i, bit - 1);
+
+            __u32 block = _bitmap_block(i, bit);
+
+            return size << 32 | block;
         }
     }
+
+    // for (size_t i = 0; i < h->pool.blocks; i++) {
+    //     if (!_bitmap_index_used(h->pool.bitmap, i)) {
+    //         _bitmap_alloc(h->pool.bitmap, i);
+
+    //         return size << 32 | i;
+    //     }
+    // }
 
     return 0;
 }
 
 [[gnu::always_inline]]
 inline void hring_mpool_free(struct hring* h, hring_addr_t addr) {
-    _bitmap_free(h->pool.bitmap, hring_addr_off(addr));
+    _bitmap_free_fast(h->pool.bitmap, hring_addr_off(addr));
 }
 
 [[gnu::always_inline]]
@@ -428,8 +468,10 @@ static int _hring_mpool_init(struct hring* h, size_t blocks) {
         return -1;
     }
 
+    memset(h->pool.bitmap, 0xFF, blocks / 8);
+
     pool->blocks = blocks;
-    pool->map = pool->bitmap + BLOCK_SIZE;
+    pool->map = (__u8*)pool->bitmap + BLOCK_SIZE;
 
     return 0;
 }
@@ -450,7 +492,7 @@ static int _hring_mpool_attach(struct hring* h) {
         return -1;
     };
 
-    pool->map = pool->bitmap + BLOCK_SIZE;
+    pool->map = (__u8*)pool->bitmap + BLOCK_SIZE;
 
     return 0;
 }
@@ -574,11 +616,12 @@ int hring_attach(struct hring* h, char* name) {
 }
 
 void _pp_bitmap(struct hring const* const h) {
+    __u8* bitmap = (__u8*)h->pool.bitmap;
+
     for (size_t i = 0; i < (BLOCK_SIZE * __hring_bitmap_blocks(h)) >> 5; i++) {
         printf("0x%.8zX:", i);
 
-        for (size_t j = 0; j < 32; j++)
-            printf(" %.2X", h->pool.bitmap[j + i * 32]);
+        for (size_t j = 0; j < 32; j++) printf(" %.2X", bitmap[j + i * 32]);
 
         printf("\n");
     }

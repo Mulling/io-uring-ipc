@@ -31,7 +31,8 @@ size_t target = TSIZE;
 void callback(struct hring* h, struct io_uring_cqe const* const cqe) {
     target--;
 
-    // printf("%lu\n", *(size_t*)hring_deref(h, cqe->user_data));
+    // printf("%llu, %lu\n", hring_addr_off(cqe->user_data),
+    //        *(size_t*)hring_deref(h, cqe->user_data));
 
     hring_mpool_free(h, cqe->user_data);
 }
@@ -76,6 +77,24 @@ int child_main() {
 }
 
 int main([[maybe_unused]] int argc, char** argv) {
+    // __u64 test = 0b00100;
+
+    // __u16 bit = _bitmap_find_free(&test, 0);
+
+    // printf("%u\n", bit);
+
+    // __u32 block = _bitmap_block(0, bit);
+
+    // _bitmap_alloc_fast(&test, block);
+
+    // printf("%u, %llu\n", block, test);
+
+    // _bitmap_free_fast(&test, block);
+
+    // printf("%u, %llu\n", block, test);
+
+    // return 0;
+
     // run the completion side
     if (strcmp("child", argv[0]) == 0)
         return child_main();
@@ -102,10 +121,11 @@ int main([[maybe_unused]] int argc, char** argv) {
                     addr = hring_mpool_alloc(&h, 1);
 
                     // if (!addr) {
-                    //     // warn("hring_mpool_alloc: could not allocate");
+                    //     warn("hring_mpool_alloc: could not allocate");
 
                     //     usleep(1);
                     // }
+
 
                 } while (!addr);
 
