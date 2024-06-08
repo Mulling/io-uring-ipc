@@ -137,14 +137,12 @@ inline void _bitmap_alloc(__u64* bitmap, __u32 i, __u32 bit) {
     assert(bit < 64);
     assert(_bitmap_index_is_free(bitmap, i, bit));
 
-    __atomic_fetch_and(&bitmap[i], ~(0x01LLU << bit), 0);
+    __atomic_fetch_and(&bitmap[i], 0xFFFFFFFFFFFFFFFELLU << bit, 0);
 }
 
 [[gnu::always_inline]]
 inline void _bitmap_free(__u64* bitmap, __u32 i) {
-    assert(
-        !_bitmap_index_is_free(bitmap, i / 64, i & 0x3F) ||
-        (printf("i = %u, index = %u, bit = %u\n", i, i / 64, i & 0x3F), false));
+    assert(!_bitmap_index_is_free(bitmap, i / 64, i & 0x3F));
 
     __atomic_fetch_or(&bitmap[i / 64], 0x01LLU << (i & 0x3F), 0);
 }
@@ -165,24 +163,26 @@ hring_addr_t hring_mpool_alloc(struct hring* h, size_t size) {
     if (size > BLOCK_SIZE)
         return 0;
 
+    __u64 s = size << 32;
+
     __u64* bitmap = h->pool.bitmap;
 
     for (size_t i = 0; i < (h->pool.blocks / 64); i++) {
         __u32 bit = _bitmap_find_free(bitmap, i);
 
-        if (bit-- != 0) {
+        if (__builtin_expect(bit-- != 0, 1)) {
             _bitmap_alloc(bitmap, i, bit);
 
-            return (size << 32) | ((i << 6) | bit);
+            return s | (i << 6 | bit);
         }
 
         // try again, this might be lower than the batch size
         bit = _bitmap_find_free(bitmap, i);
 
-        if (bit-- != 0) {
+        if (__builtin_expect(bit-- != 0, 1)) {
             _bitmap_alloc(bitmap, i, bit);
 
-            return (size << 32) | ((i << 6) | bit);
+            return s | (i << 6) | bit;
         }
     }
 
@@ -310,24 +310,24 @@ int hring_deque_with_callback(struct hring* h,
 
     __u32 head = *cr->khead;
     __u32 tail = _hring_smp_load_acquire(cr->ktail);
-    __u32 nr = 0;
+    __u32 whead = head;
 
     int ret = 0;
 
     do {
-        if (head + nr == tail)
+        if (__builtin_expect(whead == tail, 0))
             break;
 
-        struct io_uring_cqe* cqe = &cr->cqes[(head + nr) & cr->ring_mask];
+        struct io_uring_cqe* cqe = &cr->cqes[whead & cr->ring_mask];
 
         cb(h, cqe);
 
-        nr++;
+        whead++;
 
     } while (true);
 
-    if (nr)
-        _hring_smp_store_release(cr->khead, *cr->khead + nr);
+    if (head != whead)
+        _hring_smp_store_release(cr->khead, whead);
     else
         // since we do not map the sring flags, enter the kernel to drive the
         // runtime forward
