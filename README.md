@@ -27,19 +27,19 @@ struct hring h = { 0 };
 hring_init(&h, addr, 4096, 32, 32 << 8); // creates an entry in /dev/shm with the following format:
 //             ^           ^   ^
 //             |           |   |
-//             |           |   +--------------------------------------------------+
-//             |           |                                                      |
-//             |           +--------------------------------------------+         |
-//             |                                                        |         |
-//             +----------------------------+                           |         |
-//                                          |                           |         |
-//                                          v                           v         v
-//                                          hring_shm:<pid>:<uring_fd>:<sq_size>:<cq_size>
-//                                                     ^     ^
-//                                                     |     |
-//                                                     |     +----> uring file descriptor
-//                                                     |
-//                                                     +----------> process pid
+//             |           |   +---------------------+
+//             |           |                         |
+//             |           +---------------+         |
+//             |                           |         |
+//             |                           |         |
+//             |                           |         |
+//             v                           v         v
+//             hring_shm:<pid>:<uring_fd>:<sq_size>:<cq_size>
+//                        ^     ^
+//                        |     |
+//                        |     +----> uring file descriptor
+//                        |
+//                        +----------> process pid
 hring_addr_t addr = hring_alloc(&h, sizeof(int));
 
 size_t* msg = hring_deref(&h, addr);
@@ -61,11 +61,11 @@ struct hring h;
 hring_attach(&h, addr);
 
 hring_deque_with_callback(&h, callback);
-/*                            ^
-                              |   Try to dequeue all entries, calling callback for each.
-     +------------------------+
-     |
-     v                            */
+//                            ^
+//                            |
+//   +------------------------+   Try to dequeue all entries, calling callback for each.
+//   |
+//   v
 void callback(struct hring* h, struct io_uring_cqe const* const cqe) {
    hring_addr_t addr = cqe->user_data;
 
