@@ -10,6 +10,10 @@ Another option is to disable it completely.
 
 ```sh
 echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
+
+# or
+
+make disable-ptrace-scope
 ```
 
 To send a message:
