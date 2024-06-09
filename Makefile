@@ -18,6 +18,11 @@ perf: main cleanup
 	$(QUIET_PERF) perf record -e ${HRING_PERF_EVENTS} ./main
 	perf report -v
 
+disable-ptrace-scope:
+	@if [ "$$(cat /proc/sys/kernel/yama/ptrace_scope)" -ne 0 ]; then \
+		echo 0 > /proc/sys/kernel/yama/ptrace_scope; \
+	fi
+
 compile_commands.json: Makefile
 	$(QUIET_BEAR) bear -- $(MAKE)
 
