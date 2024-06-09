@@ -13,7 +13,7 @@ echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
 
 # or
 
-make disable-ptrace-scope
+sudo make disable-ptrace-scope
 ```
 
 To send a message:
