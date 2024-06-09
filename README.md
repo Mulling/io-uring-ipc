@@ -8,7 +8,7 @@ One of the limitations of this approach is that the [yama security model](https:
 
 Another option is to disable it completely.
 
-```sh
+```bash
 echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
 
 # or
@@ -80,7 +80,7 @@ void callback(struct hring* h, struct io_uring_cqe const* const cqe) {
 ### Building:
 Just include `hring.h`.
 
-```sh
+```bash
 make test
 
 # or
