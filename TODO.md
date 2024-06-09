@@ -1,2 +1,3 @@
+- Add tests
 - Allow for generic allocators
 - Add more allocators
