@@ -42,7 +42,7 @@ typedef __u64 hring_addr_t;
 
 struct hring_mpool {
     __u32 blocks;
-    __u8* bitmap;
+    __u64* bitmap;
     void* map;
 };
 
@@ -114,22 +114,39 @@ inline __s32 __pidfd_open(__s32 ppid) {
 }
 
 [[gnu::always_inline]]
-inline bool _bitmap_index_used(__u8* bitmap, __u32 i) {
-    return bitmap[i / 8] & (0x01 << (i & 0x07));
+inline __u32 _bitmap_find_free(__u64* bitmap, __u32 i) {
+    return __builtin_ffsll(bitmap[i]);
 }
 
 [[gnu::always_inline]]
-static inline void _bitmap_alloc(__u8* bitmap, __u32 i) {
-    assert(!_bitmap_index_used(bitmap, i));
+inline __u32 _bitmap_block(__u32 index, __u16 bit) {
+    assert(bit != 0);
 
-    __atomic_fetch_or(&bitmap[i / 8], (0x01 << (i & 0x07)), 0);
+    return index + --bit;
+}
+
+#ifndef NDEBUG
+[[gnu::always_inline]]
+inline bool _bitmap_index_is_free(__u64* bitmap, __u32 i, __u32 bit) {
+    bool used = bitmap[i] & (0x01LLU << bit);
+
+    return used;
+}
+#endif
+
+[[gnu::always_inline]]
+inline void _bitmap_alloc(__u64* bitmap, __u32 i, __u32 bit) {
+    assert(bit < 64);
+    assert(_bitmap_index_is_free(bitmap, i, bit));
+
+    __atomic_fetch_and(&bitmap[i], 0xFFFFFFFFFFFFFFFELLU << bit, 0);
 }
 
 [[gnu::always_inline]]
-inline void _bitmap_free(__u8* bitmap, __u32 i) {
-    assert(_bitmap_index_used(bitmap, i));
+inline void _bitmap_free(__u64* bitmap, __u32 i) {
+    assert(!_bitmap_index_is_free(bitmap, i / 64, i & 0x3F));
 
-    __atomic_fetch_and(&bitmap[i / 8], ~(0x01 << (i & 0x07)), 0);
+    __atomic_fetch_or(&bitmap[i / 64], 0x01LLU << (i & 0x3F), 0);
 }
 
 [[gnu::always_inline]]
@@ -143,14 +160,31 @@ static inline __u32 __hring_bitmap_blocks(struct hring const* const h) {
 }
 
 hring_addr_t hring_mpool_alloc(struct hring* h, size_t size) {
+    assert(size != 0);
+
     if (size > BLOCK_SIZE)
         return 0;
 
-    for (size_t i = 0; i < h->pool.blocks; i++) {
-        if (!_bitmap_index_used(h->pool.bitmap, i)) {
-            _bitmap_alloc(h->pool.bitmap, i);
+    __u64 s = size << 32;
 
-            return size << 32 | i;
+    __u64* bitmap = h->pool.bitmap;
+
+    for (size_t i = 0; i < (h->pool.blocks / 64); i++) {
+        __u32 bit = _bitmap_find_free(bitmap, i);
+
+        if (__builtin_expect(bit-- != 0, 1)) {
+            _bitmap_alloc(bitmap, i, bit);
+
+            return s | (i << 6 | bit);
+        }
+
+        // try again, this might be lower than the batch size
+        bit = _bitmap_find_free(bitmap, i);
+
+        if (__builtin_expect(bit-- != 0, 1)) {
+            _bitmap_alloc(bitmap, i, bit);
+
+            return s | (i << 6) | bit;
         }
     }
 
@@ -278,24 +312,24 @@ int hring_deque_with_callback(struct hring* h,
 
     __u32 head = *cr->khead;
     __u32 tail = _hring_smp_load_acquire(cr->ktail);
-    __u32 nr = 0;
+    __u32 whead = head;
 
     int ret = 0;
 
     do {
-        if (head + nr == tail)
+        if (__builtin_expect(whead == tail, 0))
             break;
 
-        struct io_uring_cqe* cqe = &cr->cqes[(head + nr) & cr->ring_mask];
+        struct io_uring_cqe* cqe = &cr->cqes[whead & cr->ring_mask];
 
         cb(h, cqe);
 
-        nr++;
+        whead++;
 
     } while (true);
 
-    if (nr)
-        _hring_smp_store_release(cr->khead, *cr->khead + nr);
+    if (head != whead)
+        _hring_smp_store_release(cr->khead, whead);
     else
         // since we do not map the sring flags, enter the kernel to drive the
         // runtime forward
@@ -430,8 +464,10 @@ static int _hring_mpool_init(struct hring* h, size_t blocks) {
         return -1;
     }
 
+    memset(h->pool.bitmap, 0xFF, blocks / 8);
+
     pool->blocks = blocks;
-    pool->map = pool->bitmap + BLOCK_SIZE;
+    pool->map = (__u8*)pool->bitmap + BLOCK_SIZE;
 
     return 0;
 }
@@ -452,7 +488,7 @@ static int _hring_mpool_attach(struct hring* h) {
         return -1;
     };
 
-    pool->map = pool->bitmap + BLOCK_SIZE;
+    pool->map = (__u8*)pool->bitmap + BLOCK_SIZE;
 
     return 0;
 }
@@ -576,11 +612,12 @@ int hring_attach(struct hring* h, char* name) {
 }
 
 void _pp_bitmap(struct hring const* const h) {
+    __u8* bitmap = (__u8*)h->pool.bitmap;
+
     for (size_t i = 0; i < (BLOCK_SIZE * __hring_bitmap_blocks(h)) >> 5; i++) {
         printf("0x%.8zX:", i);
 
-        for (size_t j = 0; j < 32; j++)
-            printf(" %.2X", h->pool.bitmap[j + i * 32]);
+        for (size_t j = 0; j < 32; j++) printf(" %.2X", bitmap[j + i * 32]);
 
         printf("\n");
     }

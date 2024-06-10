@@ -24,7 +24,7 @@ disable-ptrace-scope:
 	fi
 
 compile_commands.json: Makefile
-	$(QUIET_BEAR) bear -- $(MAKE)
+	$(QUIET_BEAR) bear -- $(MAKE) --no-print-directory
 
 cleanup:
 	$(RM) /dev/shm/uring_shm*
