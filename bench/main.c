@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include <bits/types/struct_timeval.h>
 #include <fcntl.h>
 #include <linux/fs.h>
