@@ -21,24 +21,43 @@
 
 #include "hring.h"
 
-#define TSIZE (1024 * 10)
+#define TSIZE (1024 * 10000)
 
 #define warn(s) (printf(__FILE__ ":%d: ", __LINE__), perror(s))
 #define die(s) (warn(s), exit(1))
 
 size_t target = TSIZE;
 
-void callback(struct hring* h, struct io_uring_cqe const* const cqe) {
-    target--;
-
-    // printf("%llu, %lu\n", hring_addr_off(cqe->user_data),
-    //        *(size_t*)hring_deref(h, cqe->user_data));
-
-    hring_mpool_free(h, cqe->user_data);
-}
+struct timeval time_start = { 0 };
+struct timeval time_end = { 0 };
 
 double time_diff(struct timeval const* const a, struct timeval const* const b) {
     return ((a->tv_sec - b->tv_sec) * 1000000) + (a->tv_usec - b->tv_usec);
+}
+
+double time_diff_sec(struct timeval const* const a,
+                     struct timeval const* const b) {
+    return time_diff(a, b) / 1000000.0;
+}
+
+double time_diff_ns(struct timeval const* const a,
+                    struct timeval const* const b) {
+    return time_diff(a, b) * 1000.0;
+}
+
+void callback(struct hring* h, struct io_uring_cqe const* const cqe) {
+    if (target == TSIZE) {
+        struct timeval* msg = hring_deref(h, cqe->user_data);
+        time_start.tv_sec = msg->tv_sec;
+        time_start.tv_usec = msg->tv_usec;
+    }
+
+    if (--target == 0) {
+        if (gettimeofday(&time_end, NULL) == -1)
+            die("gettimeofday");
+    }
+
+    hring_mpool_free(h, cqe->user_data);
 }
 
 int child_main() {
@@ -53,17 +72,7 @@ int child_main() {
     if (gettimeofday(&start, NULL) == -1)
         die("gettimeofday");
 
-    while (target) {
-        // hring_addr_t addr;
-
-        // if (hring_deque_once(&h, &addr) < 0)
-        //     warn("hring_deque_once");
-
-        // target--;
-        // c++;
-
-        hring_deque_with_callback(&h, callback);
-    }
+    while (target) hring_deque_with_callback(&h, callback);
 
     if (gettimeofday(&end, NULL) == -1)
         die("gettimeofday");
@@ -72,6 +81,9 @@ int child_main() {
 
     printf("deque %d messages in %1.2Fs (%1.2F GiB/s)\n", TSIZE, diff_secs,
            (double)(TSIZE * sizeof(size_t)) / (1024 * 1024 * 1024) / diff_secs);
+
+    printf("full one way message took an average of %.2Fns per message\n",
+           time_diff_ns(&time_end, &time_start) / (double)TSIZE);
 
     return 0;
 }
@@ -110,9 +122,12 @@ int main([[maybe_unused]] int argc, char** argv) {
 
                 } while (!addr);
 
-                size_t* msg = hring_deref(&h, addr);
+                if (i == 0) {
+                    struct timeval* msg = hring_deref(&h, addr);
 
-                *msg = i;
+                    if (gettimeofday(msg, NULL) == -1)
+                        die("gettimeofday");
+                }
 
                 if ((qed = hring_try_que(&h, addr)) == 0)
                     warn("hring_try_que: fail to queue addr");
