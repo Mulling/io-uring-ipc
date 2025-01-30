@@ -21,7 +21,7 @@
 
 #include "hring.h"
 
-#define TSIZE (1024 * 10)
+#define TSIZE (1024 * 100000)
 
 #define warn(s) (printf(__FILE__ ":%d: ", __LINE__), perror(s))
 #define die(s) (warn(s), exit(1))
@@ -72,6 +72,8 @@ int child_main() {
 
     printf("deque %d messages in %1.2Fs (%1.2F GiB/s)\n", TSIZE, diff_secs,
            (double)(TSIZE * sizeof(size_t)) / (1024 * 1024 * 1024) / diff_secs);
+
+    free(h.id);
 
     return 0;
 }
@@ -157,6 +159,8 @@ int main([[maybe_unused]] int argc, char** argv) {
         case -1:
             die("fork");
     }
+
+    free(h.id);
 
     return 0;
 }

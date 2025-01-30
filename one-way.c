@@ -85,6 +85,8 @@ int child_main() {
     printf("full one way message took an average of %.2Fns per message\n",
            time_diff_ns(&time_end, &time_start) / (double)TSIZE);
 
+    free(h.id);
+
     return 0;
 }
 
@@ -172,6 +174,8 @@ int main([[maybe_unused]] int argc, char** argv) {
         case -1:
             die("fork");
     }
+
+    free(h.id);
 
     return 0;
 }
