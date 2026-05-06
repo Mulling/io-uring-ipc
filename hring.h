@@ -139,7 +139,7 @@ inline void _bitmap_alloc(__u64* bitmap, __u32 i, __u32 bit) {
     assert(bit < 64);
     assert(_bitmap_index_is_free(bitmap, i, bit));
 
-    __atomic_fetch_and(&bitmap[i], 0xFFFFFFFFFFFFFFFELLU << bit, 0);
+    __atomic_fetch_and(&bitmap[i], ~(1ULL << bit), 0);
 }
 
 [[gnu::always_inline]]
@@ -250,7 +250,7 @@ static __u32 _hring_flush_sr(struct hring* h) {
 
     if (sr->head != tail) {
         sr->head = tail;
-        *sr->ktail = tail;
+        _hring_smp_store_release(sr->ktail, tail);
     }
 
     return tail - _hring_read_once(*sr->khead);
@@ -292,7 +292,7 @@ again:;
 
         *addr = cqe->user_data;
 
-        _hring_smp_store_release(cr->khead, *cr->khead + 1);
+        _hring_smp_store_release(cr->khead, head + 1);
     } else if (enter) {
         if ((ret = __io_uring_enter(h->fd, 0, 1, IORING_ENTER_GETEVENTS)) < 0)
             return ret;
